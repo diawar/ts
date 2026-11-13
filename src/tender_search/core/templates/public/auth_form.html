@@ -1,0 +1,20 @@
+{% extends 'public/base.html' %}
+{% block title %}{{ form_title }} — TenderSearch{% endblock %}
+{% block content %}
+<section class="auth-layout shell">
+  <div class="auth-intro"><p class="eyebrow">ВАШ АККАУНТ</p><h1>Вернём доступ<br><em>к вашим закупкам.</em></h1><p>Подборки и работа с тендерами сохранятся в аккаунте.</p></div>
+  <div class="auth-card"><h2>{{ form_title }}</h2>
+    {% if reset_confirmation and not validlink %}
+      <p role="alert">Ссылка недействительна или срок её действия истёк. Запросите новое письмо.</p>
+      <a class="btn" href="{% url 'password_reset' %}">Получить новую ссылку</a>
+    {% else %}
+      <p>{{ form_intro }}</p>
+      <form method="post">{% csrf_token %}{{ form.non_field_errors }}
+        {% for field in form %}<div class="form-field"><label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{{ field.errors }}{% if field.help_text %}<div class="field-help" id="{{ field.auto_id }}_helptext">{{ field.help_text|safe }}</div>{% endif %}</div>{% endfor %}
+        <button class="btn" type="submit">{{ button_text }}</button>
+      </form>
+    {% endif %}
+    <p><a href="{% url 'login' %}">Вернуться ко входу</a></p>
+  </div>
+</section>
+{% endblock %}

@@ -1,4 +1,5 @@
 """Refresh saved filters locally, independently of Telegram and working hours."""
+from .access import eligible_user_ids
 from datetime import timedelta
 import uuid
 from django.db import transaction
@@ -11,7 +12,7 @@ def enqueue_collection(profile_id, *, force=False):
     from .tasks import refresh_collection
     now = timezone.now()
     with transaction.atomic():
-        profile = SearchProfile.objects.select_for_update().filter(pk=profile_id, owner__is_active=True).first()
+        profile = SearchProfile.objects.select_for_update().filter(pk=profile_id, owner_id__in=eligible_user_ids()).first()
         if not profile or profile.filters.get('manual') or (not force and not profile.collection_enabled):
             return False
         if profile.collection_lease_until and profile.collection_lease_until > now:
@@ -35,7 +36,7 @@ def enqueue_collection(profile_id, *, force=False):
 
 def schedule_collections():
     now = timezone.now()
-    profiles = SearchProfile.objects.filter(collection_enabled=True, owner__is_active=True).filter(
+    profiles = SearchProfile.objects.filter(collection_enabled=True, owner_id__in=eligible_user_ids()).filter(
         Q(collection_next_at__isnull=True) | Q(collection_next_at__lte=now)).filter(
         Q(collection_lease_until__isnull=True) | Q(collection_lease_until__lte=now))
     for identifier in profiles.values_list('pk', flat=True)[:20]:
@@ -46,7 +47,7 @@ def update_collection(profile_id, lease, revision):
     from .index_service import execute_local_search
     from .workflow_state import inherit_workflows
     profile = SearchProfile.objects.filter(pk=profile_id, collection_lease=lease,
-        collection_revision=revision, owner__is_active=True).first()
+        collection_revision=revision, owner_id__in=eligible_user_ids()).first()
     if not profile:
         return
     job = None
@@ -107,3 +108,4 @@ def update_collection(profile_id, lease, revision):
             collection_next_at=timezone.now()+timedelta(minutes=profile.interval_minutes))
         if job is not None:
             WebSearch.objects.filter(pk=job.pk).delete()
+

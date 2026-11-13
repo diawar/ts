@@ -1,3 +1,4 @@
+from .access import eligible_user_ids
 from datetime import timedelta
 from html import escape
 import secrets
@@ -45,7 +46,7 @@ def schedule_status_checks():
     from .tasks import check_announcement_status
     now=timezone.now()
     owners=TelegramSubscription.objects.filter(enabled=True,chat_id__isnull=False).values('owner_id')
-    candidates=AnnouncementWatch.objects.filter(enabled=True,owner_id__in=owners,owner__is_active=True).filter(Q(next_check_at__isnull=True)|Q(next_check_at__lte=now)).filter(Q(lease_until__isnull=True)|Q(lease_until__lt=now))
+    candidates=AnnouncementWatch.objects.filter(enabled=True,owner_id__in=owners).filter(owner_id__in=eligible_user_ids()).filter(Q(next_check_at__isnull=True)|Q(next_check_at__lte=now)).filter(Q(lease_until__isnull=True)|Q(lease_until__lt=now))
     for watch in candidates[:100]:
         token=secrets.token_hex(16)
         claimed=AnnouncementWatch.objects.filter(pk=watch.pk,enabled=True).filter(Q(lease_until__isnull=True)|Q(lease_until__lt=now)).update(lease=token,lease_until=now+timedelta(minutes=5))
@@ -56,7 +57,7 @@ def schedule_status_checks():
 
 
 def check_status(watch_id, lease):
-    watch=AnnouncementWatch.objects.filter(pk=watch_id,enabled=True,lease=lease,owner__is_active=True).select_related('announcement','lot').first()
+    watch=AnnouncementWatch.objects.filter(pk=watch_id,enabled=True,lease=lease,owner_id__in=eligible_user_ids()).select_related('announcement','lot').first()
     if not watch:return
     try:
         if not Favorite.objects.filter(owner=watch.owner,lot=watch.lot).exists():
@@ -92,7 +93,7 @@ def deliver_status_notifications():
     if not settings.TELEGRAM_BOT_TOKEN:return
     now=timezone.now()
     StatusDelivery.objects.filter(state='sending',updated_at__lt=now-timedelta(minutes=5)).update(state='uncertain',error='Доставка не подтверждена; повтор отключён.')
-    deliveries=StatusDelivery.objects.filter(state='pending',watch__owner__is_active=True).filter(Q(retry_at__isnull=True)|Q(retry_at__lte=now)).select_related('watch')
+    deliveries=StatusDelivery.objects.filter(state='pending',watch__owner_id__in=eligible_user_ids()).filter(Q(retry_at__isnull=True)|Q(retry_at__lte=now)).select_related('watch')
     for delivery in deliveries[:20]:
         watch=delivery.watch
         if (delivery.event_key.endswith((':start',':stop')) or delivery.generation!=watch.generation or
@@ -115,3 +116,5 @@ def deliver_status_notifications():
                 from .workflow_notifications import cancel_pending
                 cancel_pending(watch.owner_id)
             StatusDelivery.objects.filter(pk=delivery.pk).update(state='uncertain' if exc.code==0 else 'error',error=f'Telegram: {exc.code}')
+
+

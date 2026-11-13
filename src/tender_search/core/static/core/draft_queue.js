@@ -60,10 +60,18 @@
    last=identity;row.dataset.state=saved.state;row.querySelector('.queue-state').textContent=saved.label;
    row.querySelector('.queue-detail').textContent=result.snapshot.message||'';
    const steps=row.querySelector('.queue-step-progress');if(steps&&saved.steps_html)steps.innerHTML=saved.steps_html;
+   if(saved.workflow_stage==='awaiting_results'&&row.closest('#collection-workspace')?.dataset.stage==='preparing'&&row.dataset.movedToResults!=='true'){
+    row.dataset.movedToResults='true';row.hidden=true;
+    for(const link of document.querySelectorAll('.collection-funnel a')){
+     const stage=new URL(link.href,location.href).searchParams.get('stage'),counter=link.querySelector('strong');
+     if(counter&&['preparing','awaiting_results'].includes(stage))counter.textContent=Math.max(0,Number(counter.textContent)+(stage==='preparing'?-1:1));
+    }
+    output.textContent='Черновик готов. Лот перенесён в «Ожидаем итоги».';
+   }
    const remove=row.querySelector('.queue-remove');if(remove)remove.disabled=['running','waiting'].includes(saved.state);
    controls();
    if(automatic&&row===activeRow&&['blocked','paused'].includes(saved.state)){automatic=false;activeRow=null;controls();}
-   output.textContent=saved.state==='complete'?'Черновик готов, результат сохранён в лоте. Можно передать следующий лот.':'Прогресс сохранён в очереди.';
+   output.textContent=saved.workflow_stage==='awaiting_results'?'Черновик готов. Лот находится в «Ожидаем итоги».':saved.state==='complete'?'Черновик готов, результат сохранён в лоте. Можно передать следующий лот.':'Прогресс сохранён в очереди.';
   }catch(error){automatic=false;controls();output.textContent=error.message||'Не удалось обновить очередь.';}
   finally{polling=false;if(automatic&&(!activeRow||['complete','cancelled'].includes(activeRow.dataset.state)))void next();}
  }

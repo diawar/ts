@@ -2,6 +2,42 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 import uuid
+from .access import trial_end
+
+
+class EmailVerification(models.Model):
+    owner = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='email_verification')
+    email = models.EmailField(max_length=254)
+    required = models.BooleanField(default=True)
+    nonce = models.CharField(max_length=64, default=uuid.uuid4)
+    verified_at = models.DateTimeField(null=True, blank=True)
+
+
+class AuthRateBucket(models.Model):
+    key = models.CharField(max_length=64, primary_key=True)
+    started_at = models.DateTimeField(default=timezone.now, db_index=True)
+    attempts = models.PositiveIntegerField(default=0)
+
+
+class AuthMailJob(models.Model):
+    kind = models.CharField(max_length=20)
+    email = models.EmailField(max_length=254)
+    origin = models.URLField()
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.CASCADE)
+    nonce = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    available_at = models.DateTimeField(default=timezone.now, db_index=True)
+    completed_at = models.DateTimeField(null=True, db_index=True)
+    attempts = models.PositiveIntegerField(default=0)
+    last_error = models.CharField(max_length=100, blank=True)
+
+
+class TrialAccess(models.Model):
+    owner = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                                related_name='trial_access')
+    started_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField(default=trial_end, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
 
 class Timestamped(models.Model):
@@ -106,6 +142,8 @@ class TechnicalDocumentIndex(Timestamped):
 
 
 class Document(Timestamped):
+    current_version = models.ForeignKey("DocumentVersion", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="+")
     kind = models.CharField(max_length=20, default='other', db_index=True)
     announcement = models.ForeignKey(Announcement, on_delete=models.CASCADE, related_name="documents")
     lot = models.ForeignKey(Lot, null=True, blank=True, on_delete=models.SET_NULL)
@@ -196,7 +234,7 @@ class SearchProfile(Timestamped):
 
 
 class CollectionLot(Timestamped):
-    STAGES = [('new', 'Сохранён в подборку'), ('interesting', 'Интересные лоты'), ('preparing', 'Подготовка заявки'), ('applied', 'Подали заявку'),
+    STAGES = [('new', 'Сохранён в подборку'), ('interesting', 'Интересные лоты'), ('preparing', 'Подготовка заявки'), ('awaiting_results', 'Ожидаем итоги'), ('applied', 'Подали заявку'),
               ('won', 'Выиграли'), ('lost', 'Проиграли'), ('not_participated', 'Не участвовали'), ('contract', 'Заключение договора'), ('delivery', 'Поставка'), ('payment', 'Оплата'), ('archived', 'Архив')]
     OUTCOMES = [('', 'Решение не указано'), ('won', 'Выиграли'), ('lost', 'Не выиграли')]
     profile = models.ForeignKey(SearchProfile, on_delete=models.CASCADE, related_name='collection_lots')
@@ -219,6 +257,7 @@ class UserLotWorkflow(Timestamped):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
     stage = models.CharField(max_length=20, choices=CollectionLot.STAGES, default='new')
+    stage_entered_at = models.DateTimeField(default=timezone.now, db_index=True)
     outcome = models.CharField(max_length=10, choices=CollectionLot.OUTCOMES, blank=True)
     expired_from_stage = models.CharField(max_length=20, blank=True)
     result_tracking = models.BooleanField(default=False)
@@ -636,7 +675,7 @@ class UserLotPrice(Timestamped):
 class CompanySettings(Timestamped):
     is_vat_payer = models.BooleanField(default=True)
     owner = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    company_bin = models.CharField(max_length=12, blank=True, default="241040001415")
+    company_bin = models.CharField(max_length=12, blank=True, default="")
     company_name = models.CharField(max_length=500, blank=True, default="ТОО \"OVERSHOP.KZ\"")
     address_city = models.CharField(max_length=200, blank=True, default="Павлодар")
     address_street = models.CharField(max_length=300, blank=True, default="Желтоксан")
@@ -648,6 +687,10 @@ class CompanySettings(Timestamped):
     bank_bic = models.CharField(max_length=11, blank=True, default="HSBKKZKX")
     contact_phone = models.CharField(max_length=25, blank=True)
     taxpayer_type = models.CharField(max_length=200, blank=True, default="Юридическое лицо")
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['company_bin'],
+            condition=~models.Q(company_bin=''), name='unique_company_bin')]
 
 
 class LotShipment(Timestamped):

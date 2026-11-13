@@ -28,6 +28,67 @@ class SpecificationTests(TestCase):
         self.lot.refresh_state = 'done'; self.lot.checked_at = timezone.now(); self.lot.save()
         self.client.force_login(self.owner)
 
+    def test_docx_rejects_dtd_and_entities_before_expansion_or_external_reads(self):
+        with TemporaryDirectory() as directory:
+            path=Path(directory)/'unsafe.docx'
+            for entity in ('"unsafe"','SYSTEM "file:///tmp/never-read-this-file"'):
+                with ZipFile(path,'w') as archive:
+                    archive.writestr('word/document.xml',
+                        '<!DOCTYPE doc [<!ENTITY value '+entity+'>]>'
+                        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                        '<w:body><w:p><w:r><w:t>&value;</w:t></w:r></w:p></w:body></w:document>')
+                with self.assertRaisesMessage(SourceError,'запрещённые XML'):
+                    extract_text(path,'unsafe.docx')
+
+    def test_saved_text_returns_in_post_without_queue_or_source_request(self):
+        LotSpecification.objects.create(owner=self.owner,lot=self.lot,state='done',
+            documents=[{'name':'Требования','text':'Сохранённый USB 3.0','source_url':'https://files.example/1','scope':'lot'}])
+        with patch('tender_search.core.tasks.extract_lot_specification.delay') as task, \
+                patch('tender_search.core.specification_service.lot_client') as source:
+            response=self.client.post(f'/lots/{self.lot.pk}/specification/',HTTP_X_LOT_ASYNC='1')
+        self.assertFalse(response.json()['queued'])
+        self.assertIn('Сохранённый USB 3.0',response.json()['specification_html'])
+        task.assert_not_called();source.assert_not_called()
+        self.assertEqual(response['Cache-Control'],'private, no-store')
+
+    def test_complete_shared_cache_is_reused_only_after_request_and_respects_scope(self):
+        from .models import Document as SavedDocument, DocumentVersion, TechnicalDocumentIndex
+        other_lot=store_lot(row(2))
+        other_lot.announcement=self.lot.announcement;other_lot.save()
+        for identifier,lot,text in [('a',self.lot,'Наш лот'),('b',None,'Общий документ'),('c',other_lot,'Чужой лот')]:
+            doc=SavedDocument.objects.create(announcement=self.lot.announcement,lot=lot,source_id=identifier,
+                name='Техспецификация',url='https://files.example/'+identifier,kind='technical',status='ready')
+            version=DocumentVersion.objects.create(document=doc,sha256=identifier*64,text=text)
+            doc.current_version=version;doc.save()
+        TechnicalDocumentIndex.objects.create(lot=self.lot,state='ready',checked_at=timezone.now())
+        self.assertNotContains(self.client.get(f'/lots/{self.lot.pk}/'),'Наш лот')
+        with patch('tender_search.core.tasks.extract_lot_specification.delay') as task:
+            response=self.client.post(f'/lots/{self.lot.pk}/specification/',HTTP_X_LOT_ASYNC='1')
+        task.assert_not_called()
+        self.assertFalse(response.json()['queued'])
+        self.assertIn('Наш лот',response.json()['specification_html'])
+        self.assertIn('Общий документ',response.json()['specification_html'])
+        self.assertNotIn('Чужой лот',response.json()['specification_html'])
+
+    def test_partial_cache_does_not_claim_completion_and_refresh_preserves_old_text(self):
+        job=LotSpecification.objects.create(owner=self.owner,lot=self.lot,state='partial',documents=[{'name':'Файл','text':'Старый текст'}])
+        with patch('tender_search.core.tasks.extract_lot_specification.delay') as task:
+            response=self.client.post(f'/lots/{self.lot.pk}/specification/',{'refresh':'1'},HTTP_X_LOT_ASYNC='1')
+        task.assert_called_once()
+        self.assertTrue(response.json()['queued'])
+        self.assertIn('Старый текст',response.json()['specification_html'])
+        job.refresh_from_db();self.assertEqual(job.state,'queued')
+
+    def test_done_text_can_be_explicitly_refreshed_and_route_is_dedicated(self):
+        from tender_search.web.celery import app
+        job=LotSpecification.objects.create(owner=self.owner,lot=self.lot,state='done',documents=[{'text':'USB'}])
+        with patch('tender_search.core.tasks.extract_lot_specification.delay') as task:
+            queue_specification(self.owner,self.lot,refresh=True)
+        task.assert_called_once()
+        job.refresh_from_db();self.assertEqual(job.documents,[{'text':'USB'}])
+        route=app.amqp.router.route({},'tender_search.core.tasks.extract_lot_specification')
+        self.assertEqual(route['queue'].name,'specifications')
+
     def test_extract_formats_and_explicit_scan_failure(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / 'spec'

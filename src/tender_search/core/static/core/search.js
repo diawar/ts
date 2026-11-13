@@ -1,4 +1,72 @@
 function tagIcon(name){const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.classList.add('icon');svg.setAttribute('aria-hidden','true');const use=document.createElementNS('http://www.w3.org/2000/svg','use');use.setAttribute('href',document.body.dataset.icons+'#'+name);svg.append(use);return svg;}
+
+// Rename a saved collection independently of the current search form.
+function closeProfileRename(row){
+ const form=row.querySelector('[data-profile-rename]');
+ row.classList.remove('is-renaming');
+ form.hidden=true;
+ form.elements.namedItem('name').value=row.querySelector('[data-profile-label]').textContent;
+ row.querySelector('[data-profile-title]').hidden=false;
+ row.querySelector('[data-profile-error]').hidden=true;
+ form.elements.namedItem('name').removeAttribute('aria-invalid');
+ row.querySelector('[data-profile-edit]').focus({preventScroll:true});
+}
+function profileRenameError(form,message){
+ const error=form.querySelector('[data-profile-error]');
+ error.textContent=message;error.hidden=false;
+ form.elements.namedItem('name').setAttribute('aria-invalid','true');
+}
+document.addEventListener('click',event=>{
+ const edit=event.target.closest('[data-profile-edit]');
+ if(edit){
+  const row=edit.closest('[data-saved-profile]'),form=row.querySelector('[data-profile-rename]');
+  row.classList.add('is-renaming');
+  row.querySelector('[data-profile-title]').hidden=true;form.hidden=false;
+  const input=form.elements.namedItem('name');input.value=row.querySelector('[data-profile-label]').textContent;input.focus();input.select();
+ }
+ const cancel=event.target.closest('[data-profile-cancel]');
+ if(cancel&&!cancel.form.dataset.busy)closeProfileRename(cancel.closest('[data-saved-profile]'));
+});
+document.addEventListener('keydown',event=>{
+ const form=event.target.closest('[data-profile-rename]');
+ if(!form||event.isComposing)return;
+ if(event.key==='Escape'){event.preventDefault();if(!form.dataset.busy)closeProfileRename(form.closest('[data-saved-profile]'));}
+});
+document.addEventListener('input',event=>{
+ const form=event.target.closest('[data-profile-rename]');
+ if(form){form.querySelector('[data-profile-error]').hidden=true;event.target.removeAttribute('aria-invalid');}
+});
+document.addEventListener('submit',async event=>{
+ const form=event.target;
+ if(!form.matches('[data-profile-rename]'))return;
+ event.preventDefault();if(form.dataset.busy)return;
+ const row=form.closest('[data-saved-profile]'),label=row.querySelector('[data-profile-label]'),input=form.elements.namedItem('name');
+ const name=input.value.trim(),oldName=label.textContent;
+ if(!name){profileRenameError(form,'Введите название подборки.');input.focus();return;}
+ if(name.length>200){profileRenameError(form,'Название должно быть не длиннее 200 символов.');input.focus();return;}
+ if(name===oldName){closeProfileRename(row);return;}
+ form.dataset.busy='true';form.setAttribute('aria-busy','true');input.readOnly=true;
+ form.querySelectorAll('button').forEach(button=>{button.disabled=true;});
+ const failure='Не удалось сохранить название. Попробуйте ещё раз.';
+ try{
+  const data=new FormData(form);data.set('name',name);
+  const response=await fetch(form.action,{method:'POST',body:data,credentials:'same-origin',headers:{Accept:'application/json'}});
+  const result=await response.json();
+  if(!response.ok||typeof result.name!=='string'){profileRenameError(form,result.error||failure);return;}
+  label.textContent=result.name;
+  row.querySelectorAll('[aria-label],[title]').forEach(node=>{
+   for(const attr of ['aria-label','title']){
+    const value=node.getAttribute(attr);
+    if(value?.endsWith(oldName))node.setAttribute(attr,value.slice(0,-oldName.length)+result.name);
+   }
+  });
+  closeProfileRename(row);
+ }catch(error){profileRenameError(form,failure);}
+ finally{
+  delete form.dataset.busy;form.removeAttribute('aria-busy');input.readOnly=false;
+  form.querySelectorAll('button').forEach(button=>{button.disabled=false;});
+ }
+});
 // The server supplies elapsed time, avoiding dependence on the browser clock.
 function updateIndexTimer(){
  const timer=document.querySelector('[data-index-elapsed]');

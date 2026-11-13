@@ -11,16 +11,21 @@ for(const bad of [{purchase_method_id:11},{single_position:false},{announcement_
  {company_bin:'invalid'},{data:{...packet.data,manufacturer:''}},{data:{...packet.data,bank_account:'bad'}}])assert.throws(()=>validateDraftPacket({...packet,...bad}));
 function worker(step,local={}){
  let listener,data={},calls=[],opened=[],updates=[],navigationListener,alarmListener,alarm=null;
+ let account='1',pageAccount='1';
  const chrome={alarms:{create:async(name,value)=>{alarm={name,...value};},clear:async()=>{alarm=null;},onAlarm:{addListener:fn=>alarmListener=fn}},runtime:{id:'test-extension',getURL:p=>'chrome-extension://test-extension/'+p,onMessage:{addListener:fn=>listener=fn}},
  storage:{local:{get:async()=>structuredClone(local),set:async x=>Object.assign(local,structuredClone(x)),remove:async k=>{delete local[k];}},session:{get:async()=>structuredClone(data),set:async x=>{data=structuredClone({...data,...x});},remove:async k=>{delete data[k];}}},
- tabs:{query:async()=>[{id:7,url:'https://zakup.gov.kz/cabinet/announcement/17920228'}],create:async options=>{opened.push(options);return {id:99};},get:async()=>({status:'complete'}),
+ tabs:{query:async()=>[{id:7,url:'https://zakup.gov.kz/cabinet/announcement/17920228'}],create:async options=>{opened.push(options);return {id:99};},get:async id=>({status:'complete',url:id===11?'http://localhost:8000/lots/27723/preparation/':'https://zakup.gov.kz/cabinet/announcement/17920228'}),
+ sendMessage:async()=>account===pageAccount?{user_id:account,origin:'http://localhost:8000',pathname:'/lots/27723/preparation/'}:{error:'Аккаунт изменился'},
  onUpdated:{addListener:fn=>navigationListener=fn,removeListener:fn=>{if(navigationListener===fn)navigationListener=null;}},
  update:async(id,options)=>{updates.push({id,...options});setTimeout(()=>navigationListener?.(id,{status:'complete'}),0);}},
  scripting:{executeScript:async({args})=>{calls.push(args[1]);return [{result:await step(args[1])}];}}};
- const context={chrome,validateDraftPacket,runDraftStep,URL,Date,setTimeout,clearTimeout,GOSZAKUP_APP_ORIGINS:['http://localhost:8000'],importScripts(){}};
+ const context={chrome,validateDraftPacket,runDraftStep,URL,Date,setTimeout,clearTimeout,crypto:require('node:crypto').webcrypto,GOSZAKUP_APP_ORIGINS:['http://localhost:8000'],importScripts(){}};
  vm.createContext(context);vm.runInContext(fs.readFileSync(__dirname+'/background.js','utf8'),context);
  const sender={id:chrome.runtime.id,url:chrome.runtime.getURL('popup.html')};
- return {calls,opened,updates,get alarm(){return alarm;},fire:async()=>{const a=alarm;alarm=null;alarmListener(a);await settle();},get job(){return data.draftJob;},send:(message,from=sender)=>new Promise(resolve=>{if(listener(message,from,resolve)===false)resolve({ignored:true});}),
+ return {calls,opened,updates,switchAccount(value,stale=false){account=String(value);if(!stale)pageAccount=account;},seed(job){data.draftJob=structuredClone(job);},get alarm(){return alarm;},fire:async()=>{const a=alarm;alarm=null;alarmListener(a);await settle();},get job(){return data.draftJob;},send:(message,from=sender)=>new Promise(resolve=>{
+  if(message.type==='draft:load')message={appTabId:11,appOrigin:'http://localhost:8000',appUserId:account,...message};
+  if(message.type.startsWith('bridge:'))message={account_id:pageAccount,...message};
+  if(listener(message,from,resolve)===false)resolve({ignored:true});}),
   untrusted:()=>listener({type:'draft:start'},{id:'other',url:'https://zakup.gov.kz/'},()=>{throw Error('Unauthorized response');})};
 }
 const settle=()=>new Promise(resolve=>setTimeout(resolve,15));
@@ -136,7 +141,56 @@ const settle=()=>new Promise(resolve=>setTimeout(resolve,15));
  await ambiguous.send({type:'draft:load',packet});await ambiguous.send({type:'draft:start'});await settle();
  await ambiguous.fire();assert.equal(createRequests,1);assert.equal(ambiguous.job.status,'waiting');assert.equal(ambiguous.job.createUncertain,true);
  unknownPhase=2;await ambiguous.fire();assert.equal(ambiguous.job.status,'complete');assert.equal(createRequests,1);
+ // Switching accounts in one Chrome profile must remove the old packet before
+ // the popup or a different account's queue can inspect it.
+ const privateDisk={};
+ const switched=worker(async()=>({next:'save_account'}),privateDisk);
+ await switched.send({type:'draft:load',packet:{...packet,existing_application_number:'123'}});
+ switched.switchAccount('2');
+ const hidden=await switched.send({type:'draft:get'});
+ assert.ok(hidden.error);assert.equal(hidden.job,undefined);assert.equal(switched.job,undefined);
+ assert.equal(JSON.stringify(hidden).includes(packet.data.contact_phone),false);
+ assert.equal(JSON.stringify(privateDisk).includes('product_name'),false);
+ assert.equal(Object.values(privateDisk)[0].number,'123'); // Keep the minimal duplicate guard.
+ await switched.send({type:'draft:load',packet});
+ assert.equal(switched.job.number,'');assert.equal(switched.job.createUncertain,true);
+ await switched.send({type:'draft:clear'});await switched.send({type:'draft:load',packet});
+ assert.equal(switched.job.number,''); // Clearing/reloading must not adopt A's recovery number.
+ const legacy=worker(async()=>({next:'save_account'}));
+ legacy.seed({packet,status:'ready'});
+ assert.ok((await legacy.send({type:'draft:get'})).error);assert.equal(legacy.job,undefined);
+ const queueSwitch=worker(async()=>({next:'save_account'}));
+ await queueSwitch.send({type:'bridge:prepare',packet,queue_context:contextQueue},queueSender);
+ queueSwitch.switchAccount('2');
+ const oldSnapshot=await queueSwitch.send({type:'bridge:queue-status'},queueSender);
+ assert.equal(oldSnapshot.snapshot,undefined);assert.equal(queueSwitch.job,undefined);
+ const stalePage=worker(async()=>({next:'save_account'}));
+ stalePage.switchAccount('2',true);
+ assert.ok((await stalePage.send({type:'bridge:prepare',packet},appSender)).error);
+ assert.equal(stalePage.job,undefined);assert.equal(stalePage.opened.length,0);
+ const wrongAccount=worker(async()=>({next:'save_account'}));
+ wrongAccount.switchAccount('2');
+ assert.ok((await wrongAccount.send({type:'bridge:prepare',packet,account_id:'1'},appSender)).error);
+ const waitSwitch=worker(async()=>({blocked:true,retryable:true,message:'Unavailable'}));
+ await waitSwitch.send({type:'draft:load',packet});await waitSwitch.send({type:'draft:start'});await settle();
+ waitSwitch.switchAccount('2');await waitSwitch.fire();
+ assert.equal(waitSwitch.job,undefined);assert.equal(waitSwitch.updates.length,0);
+ let finishMutation;
+ const delayed=worker(async action=>action==='probe'?{next:'save_account'}:new Promise(resolve=>{finishMutation=resolve;}));
+ await delayed.send({type:'draft:load',packet});await delayed.send({type:'draft:start'});await settle();
+ assert.equal(typeof finishMutation,'function');
+ delayed.switchAccount('2');await delayed.send({type:'draft:get'});
+ finishMutation({number:'999',lotConfirmed:true});await settle();
+ assert.equal(delayed.job,undefined); // A late portal response cannot resurrect account A's data.
+ let resolveOld;
+ const replacement=worker(async action=>action==='probe'?{next:'save_account'}:new Promise(resolve=>{resolveOld=resolve;}));
+ await replacement.send({type:'draft:load',packet});await replacement.send({type:'draft:start'});await settle();
+ replacement.switchAccount('2');
+ replacement.seed({...replacement.job,jobId:'new-account-job',appUserId:'2',status:'ready',number:'',packet:{...packet,data:{...packet.data,product_name:'Owner B'}}});
+ resolveOld({number:'111',lotConfirmed:true});await settle();
+ assert.equal(replacement.job.status,'ready');assert.equal(replacement.job.number,'');assert.equal(replacement.job.packet.data.product_name,'Owner B');
  console.log('Draft packet validation, sender restriction, confirmed completion and duplicate creation guard passed');
+ console.log('Account switching: popup isolation, queue isolation, stale source tabs, recovery alarms and late-response fencing passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 
 module.exports={packet};

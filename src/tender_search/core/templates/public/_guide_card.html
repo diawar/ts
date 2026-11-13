@@ -1,0 +1,6 @@
+{% load search_tags %}<article class="guide-card">
+  <div class="guide-card-top"><span class="guide-symbol">{% icon item.icon %}</span><span>{{ item.category }}</span></div>
+  <h3><a href="{% url 'guide' slug=item.slug %}">{{ item.title }}</a></h3>
+  <p>{{ item.description }}</p>
+  <div class="guide-card-bottom"><span>{{ item.reading_minutes }} мин чтения</span><a href="{% url 'guide' slug=item.slug %}" aria-label="Читать: {{ item.title }}">Читать {% icon 'arrow-right' %}</a></div>
+</article>

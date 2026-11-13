@@ -44,6 +44,17 @@ class LotPricingTests(TestCase):
         self.assertEqual(self.client.post(self.endpoint,{'confirm_discount':'on','unit_gross':'116','vat_rate':'16'}).status_code,403)
         self.assertFalse(UserLotPrice.objects.exists())
 
+    def test_card_cache_is_scoped_to_goszakup_in_mixed_pages(self):
+        from .lot_pricing import attach_lot_budgets, cached_pricing_detail
+        medical = store_lot(row(self.lot.source_id,
+            announcement_id=self.lot.announcement.source_id, _source='med_ecc'))
+        attach_lot_budgets([self.lot, medical])
+        self.assertEqual(self.lot._budget_display['quantity'], 3)
+        self.assertEqual(medical._budget_display, {})
+        self.assertIsNone(cached_pricing_detail(medical))
+        medical.refresh_from_db()
+        self.assertIsNone(cached_pricing_detail(medical))
+
     def test_unknown_method_source_and_missing_card_do_not_enable_entry(self):
         self.lot.raw['purchase_method_id']=38
         self.assertIsNone(verified_pricing(self.lot))

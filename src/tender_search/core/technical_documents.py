@@ -3,7 +3,7 @@ from datetime import timedelta
 from pathlib import Path
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q, OuterRef, Subquery
+from django.db.models import Q, F, OuterRef, Subquery
 from django.utils import timezone
 from .models import Document, DocumentVersion, TechnicalDocumentIndex, IndexedLot, MedicalIndexedLot
 from .document_service import stored_path
@@ -18,7 +18,7 @@ def cache_file(lot, file, api):
     unchanged = previous is not None and previous.url == file.url
     doc, _ = Document.objects.update_or_create(announcement=lot.announcement, source_id=file.id,
         defaults={'lot': lot if file.lot_id else None, 'name': file.name, 'url': file.url, 'kind': 'technical'})
-    version = doc.versions.order_by('-pk').first()
+    version = doc.current_version if doc.current_version_id else doc.versions.order_by('-pk').first()
     if unchanged and version and version.text and version.storage_path and stored_path(version.storage_path).is_file():
         if version.search_text is None:
             version.save(update_fields=['text'])
@@ -30,7 +30,7 @@ def cache_file(lot, file, api):
     version.text = text
     version.pages = [{'truncated': truncated}]
     version.save(update_fields=['text', 'pages', 'updated_at'])
-    Document.objects.filter(pk=doc.pk).update(status='ready', error='')
+    Document.objects.filter(pk=doc.pk).update(current_version=version, status='ready', error='')
     return version
 
 
@@ -99,7 +99,9 @@ def matching_lots(matcher, *, now=None, is_active=None):
     matched = {}
     latest = DocumentVersion.objects.filter(document_id=OuterRef('document_id')).order_by('-pk').values('pk')[:1]
     versions = DocumentVersion.objects.filter(document__kind='technical',
-        document__announcement__deadline__gt=now or timezone.now(), pk=Subquery(latest)).exclude(text='')
+        document__announcement__deadline__gt=now or timezone.now()).filter(
+            Q(pk=F('document__current_version_id')) |
+            Q(document__current_version__isnull=True, pk=Subquery(latest))).exclude(text='')
     if settings.SEARCH_DB_PREFILTERS and not matcher.number_only:
         from .query_search import text_candidates
         versions = versions.filter(text_candidates(matcher))

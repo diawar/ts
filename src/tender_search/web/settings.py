@@ -5,6 +5,20 @@ BASE_DIR = Path(os.getenv("TENDER_BASE_DIR", Path(__file__).resolve().parents[3]
 SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
 DEBUG = os.getenv("DJANGO_DEBUG", "0") == "1"
 ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]").split(",")
+PUBLIC_SITE_URL = os.getenv("PUBLIC_SITE_URL", "")
+AUTH_SITE_URL = os.getenv("AUTH_SITE_URL", "http://localhost:8001")
+AUTH_TRUST_CLOUDFLARE_IP = os.getenv("AUTH_TRUST_CLOUDFLARE_IP", "0") == "1"
+PASSWORD_RESET_TIMEOUT = 3600
+EMAIL_VERIFICATION_TIMEOUT = 86400
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'mailpit')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '1025'))
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', '0') == '1'
+EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', '0') == '1'
+EMAIL_TIMEOUT = 10
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'TenderSearch <no-reply@tender-search.kz>')
 CSRF_TRUSTED_ORIGINS = [value for value in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if value]
 INSTALLED_APPS = [
     "django.contrib.admin", "django.contrib.auth", "django.contrib.contenttypes",
@@ -13,11 +27,14 @@ INSTALLED_APPS = [
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "tender_search.core.auth_security.AuthResponseMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "tender_search.core.access.AccessMiddleware",
+    "tender_search.core.seo.SearchIndexingMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -30,6 +47,8 @@ TEMPLATES = [{
         "django.contrib.auth.context_processors.auth",
         "django.contrib.messages.context_processors.messages",
         "tender_search.core.context_processors.favorite_counts",
+        "tender_search.core.context_processors.account_access",
+        "tender_search.core.seo.metadata",
         "tender_search.core.context_processors.procurement_coverage",
     ]},
 }]
@@ -75,6 +94,9 @@ SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_SECURE = os.getenv("HTTPS_ENABLED", "0") == "1"
 CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
+SECURE_SSL_REDIRECT = SESSION_COOKIE_SECURE
+# HTTPS service only; no preload or includeSubDomains on temporary tunnels.
+SECURE_HSTS_SECONDS = 3600 if SESSION_COOKIE_SECURE else 0
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"
 X_FRAME_OPTIONS = "DENY"
@@ -91,16 +113,18 @@ CELERY_RESULT_EXPIRES = 3600
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_ROUTES = {
     'tender_search.core.tasks.web_search': {'queue': 'interactive'},
+    'tender_search.core.tasks.extract_lot_specification': {'queue': 'specifications'},
 }
 USE_LOCAL_INDEX = True
-LEAD_COLLECTION_AVAILABLE = False
+LEAD_COLLECTION_AVAILABLE = os.getenv("LEAD_COLLECTION_AVAILABLE", "0") == "1"
 SEARCH_DB_PREFILTERS = True
 SEARCH_CANDIDATE_CACHE = False
 SEARCH_CACHE_TTL = 120
 SEARCH_CACHE_MAX_CANDIDATES = 10000
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 LOGGING = {"version": 1, "disable_existing_loggers": False,
-           "handlers": {"console": {"class": "logging.StreamHandler"}},
+           "filters": {"auth_links": {"()": "tender_search.core.auth_logging.RedactAuthLinks"}},
+           "handlers": {"console": {"class": "logging.StreamHandler", "filters": ["auth_links"]}},
            "root": {"handlers": ["console"], "level": "INFO"}}
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")

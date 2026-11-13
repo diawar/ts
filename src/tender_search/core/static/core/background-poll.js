@@ -25,5 +25,6 @@
     }
   }
   document.addEventListener('visibilitychange', resume);
+  document.addEventListener('app:account-ready', resume);
   window.addEventListener('pageshow', event => { if (event.persisted) resume(); });
 })();

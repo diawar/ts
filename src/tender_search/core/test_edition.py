@@ -20,10 +20,10 @@ class GoszakupkiEditionTests(TestCase):
             self.assertEqual(self.client.get(path).status_code, 404)
         self.assertEqual(self.client.post('/administration/clients/', {'action': 'start'}).status_code, 404)
         self.assertFalse(LeadCollectionState.objects.exists())
-        page = self.client.get('/')
-        self.assertContains(page, 'Гос<span>закупки</span>')
+        page = self.client.get('/main/')
+        self.assertContains(page, 'Tender<span>Search</span>')
         self.assertNotContains(page, 'Администрирование')
-        self.assertNotContains(page, 'TenderSearch')
+        self.assertNotContains(page, 'Гос<span>закупки</span>')
 
     def test_collector_is_inert_even_when_old_database_state_is_enabled(self):
         LeadCollectionState.objects.create(enabled=True)
@@ -38,4 +38,4 @@ class GoszakupkiEditionTests(TestCase):
             source.assert_not_called()
 
     def test_login_brand(self):
-        self.assertContains(self.client.get('/login/'), 'Вход — Госзакупки')
+        self.assertContains(self.client.get('/login/'), 'Вход — TenderSearch')

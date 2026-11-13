@@ -1,0 +1,3 @@
+{% extends 'public/base.html' %}
+{% block title %}{{ notice_title }} — TenderSearch{% endblock %}
+{% block content %}<section class="auth-layout shell"><div class="auth-intro"><p class="eyebrow">ВАШ АККАУНТ</p><h1>Доступ<br><em>к TenderSearch.</em></h1></div><div class="auth-card"><h2>{{ notice_title }}</h2><p role="status">{{ notice_text }}</p><a class="btn" href="{% url 'login' %}">Войти в аккаунт</a></div></section>{% endblock %}

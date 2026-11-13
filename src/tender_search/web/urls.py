@@ -4,15 +4,22 @@ from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.urls import path, re_path
 from django.http import HttpResponseForbidden
+from django.views.generic import RedirectView, TemplateView
 
 from tender_search.core.views import dashboard, health
 from tender_search.core import views
 from tender_search.core import lead_views
 from tender_search.core import user_admin
+from tender_search.core import public_views
+from tender_search.core import seo
+from tender_search.core import guide_views
+from tender_search.core import catalog_views
+from tender_search.core import auth_views as account_views
 from tender_search.core.extension_views import download_extension, receive_extension_report
 from tender_search.core.preparation import prepare_application, export_preparation, import_portal_status
 
 urlpatterns = [
+    path('account/identity/', views.account_identity, name='account_identity'),
     path('lots/<int:lot_id>/shipment/', shipping.save, name='shipment_save'),
     path('lots/<int:lot_id>/shipment/act/', shipping.upload_act, name='shipment_act'),
     path('lots/<int:lot_id>/shipment/act/download/', shipping.download_act, name='shipment_act_download'),
@@ -24,13 +31,38 @@ urlpatterns = [
     path('workspace/drafts/<int:item_id>/progress/', draft_queue.progress, name='draft_queue_progress'),
     path('workspace/drafts/<int:item_id>/cancel/', draft_queue.cancel, name='draft_queue_cancel'),
     path('settings/extension/report/', receive_extension_report, name='receive_extension_report'),
-    path("", dashboard, name="dashboard"),
-    path("login/", auth_views.LoginView.as_view(template_name="registration/login.html"), name="login"),
+    path("", public_views.landing, name="landing"),
+    path("robots.txt", seo.robots, name="robots"),
+    path("sitemap.xml", seo.sitemap, name="sitemap"),
+    path("guides/", guide_views.guides, name="guides"),
+    path("guides/<slug:slug>/", guide_views.guide, name="guide"),
+    path("catalog/", catalog_views.catalog, name="catalog"),
+    path("catalog/categories/<slug:category_slug>/", catalog_views.catalog, name="catalog_category"),
+    path("catalog/regions/<slug:region_slug>/", catalog_views.catalog, name="catalog_region"),
+    path("catalog/lots/<int:source_id>/", catalog_views.catalog_lot, name="catalog_lot"),
+    path("register/", public_views.register, name="register"),
+    path("account/access/", public_views.account_access, name="account_access"),
+    path("administration/users/<int:user_id>/access/", public_views.edit_access, name="administration_user_access"),
+    path("main/", dashboard, name="dashboard"),
+    path("login/", account_views.ProtectedLoginView.as_view(), name="login"),
+    path('password/reset/', account_views.password_reset, name='password_reset'),
+    path('password/reset/sent/', TemplateView.as_view(template_name='public/auth_notice.html', extra_context={
+        'notice_title': 'Проверьте почту',
+        'notice_text': 'Если для этого email есть активный аккаунт с паролем, мы отправим ссылку восстановления. Проверьте также папку «Спам». Ссылка действует 1 час.',
+    }), name='password_reset_done'),
+    path('password/reset/<uidb64>/<token>/', account_views.ProtectedPasswordResetConfirmView.as_view(), name='password_reset_confirm'),
+    path('password/complete/', TemplateView.as_view(template_name='public/auth_notice.html', extra_context={
+        'notice_title': 'Пароль изменён', 'notice_text': 'Теперь войдите в аккаунт с новым паролем. Остальные сеансы завершены.',
+    }), name='password_reset_complete'),
+    path('account/email/', account_views.email_notice, name='email_notice'),
+    path('account/email/resend/', account_views.email_resend, name='email_resend'),
+    path('account/email/confirm/<str:token>/', account_views.email_confirm, name='email_confirm'),
     path("logout/", auth_views.LogoutView.as_view(), name="logout"),
     re_path(r"^admin(?:/.*)?$", lambda request: HttpResponseForbidden("Администрирование временно отключено."), name="admin_disabled"),
     path("health/", health, name="health"),
     path("search/", views.search, name="search"),
     path("search/index-status/", views.index_status, name="index_status"),
+    path("profiles/<int:profile_id>/rename/", views.profile_rename, name="profile_rename"),
     path("profiles/<int:profile_id>/delete/", views.profile_delete, name="profile_delete"),
     path("search/<uuid:job_id>/cancel/", views.search_cancel, name="search_cancel"),
     path("search/<uuid:job_id>/", views.search_results, name="search_results"),

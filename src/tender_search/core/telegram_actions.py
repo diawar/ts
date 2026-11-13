@@ -1,5 +1,6 @@
 """Actions bound to an actually delivered private notification and its recipient."""
 import re
+from .access import eligible_user_ids
 from uuid import UUID
 from django.db import transaction
 from django.utils import timezone
@@ -25,7 +26,7 @@ def apply_interest(query):
             or not isinstance(message_id,int) or isinstance(message_id,bool) or message_id<=0
             or int(match[1])>9223372036854775807):
         return 'Кнопка недоступна для этого сообщения.'
-    sub=TelegramSubscription.objects.filter(chat_id=chat_id,enabled=True,owner__is_active=True).first()
+    sub=TelegramSubscription.objects.filter(chat_id=chat_id,enabled=True,owner_id__in=eligible_user_ids()).first()
     if not sub:
         return 'Подключите Telegram в настройках приложения.'
     with transaction.atomic():
@@ -33,7 +34,7 @@ def apply_interest(query):
         delivery=TelegramDelivery.objects.select_for_update().select_related('lot__announcement').filter(
             pk=int(match[1]),interest_token=UUID(hex=match[2]),owner_id=sub.owner_id,
             state='sent',message_id=message['message_id']).first()
-        if not delivery or not TelegramSubscription.objects.filter(pk=sub.pk,enabled=True,chat_id=chat_id,owner__is_active=True).exists():
+        if not delivery or not TelegramSubscription.objects.filter(pk=sub.pk,enabled=True,chat_id=chat_id,owner_id__in=eligible_user_ids()).exists():
             return 'Кнопка недоступна для этого сообщения.'
         state=UserLotWorkflow.objects.select_for_update().filter(owner_id=sub.owner_id,lot_id=delivery.lot_id).first()
         if state and state.stage=='interesting':
@@ -61,3 +62,4 @@ def handle_callback(query):
         except TelegramError:
             # Expired callback confirmations must not block all incoming updates.
             pass
+

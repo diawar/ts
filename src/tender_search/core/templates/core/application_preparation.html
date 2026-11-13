@@ -1,8 +1,8 @@
 {% extends 'core/base.html' %}{% load search_tags static l10n %}
-{% block title %}Подготовка заявки — Госзакупки{% endblock %}
+{% block title %}Подготовка заявки — TenderSearch{% endblock %}
 {% block content %}
 <div class="preparation-page">
-<div class="page-heading"><div><a href="{% url 'workspace' %}?profile=all&amp;stage=preparing">← К подготовке заявок</a><h1>Подготовка заявки</h1></div><a href="{% url 'notification_settings' %}#chrome-extension">Установка расширения</a></div>
+<div class="page-heading"><div>{% if workflow_stage == 'awaiting_results' %}<a href="{% url 'draft_queue' %}?stage=awaiting_results">← Ожидаем итоги</a>{% else %}<a href="{% url 'workspace' %}?profile=all&amp;stage=preparing">← К подготовке заявок</a>{% endif %}<h1>Подготовка заявки</h1></div><a href="{% url 'notification_settings' %}#chrome-extension">Установка расширения</a></div>
 <section class="panel preparation-summary">
 <h2>{{ lot.name }}</h2><p>Лот {{ lot.number }} {% include 'core/_copy_lot_number.html' %} · Объявление {{ lot.announcement.number }}</p>
 {% participation_warning lot %}
@@ -23,7 +23,7 @@
 </form>
 </section>
 {% if editable %}<section class="panel preparation-launch"><h2>Черновик на Госзакупе</h2>
-{% if preparation and not bin_changed %}{% if export_supported %}
+{% if preparation and not bin_changed and editable %}{% if export_supported %}
 <button type="button" class="button preparation-cta" id="prepare-with-extension" data-export-url="{% url 'preparation_export' lot_id=lot.pk %}">Создать черновик через расширение</button>
 <p class="muted">Откроется объявление Госзакупа. В расширении нажмите «Создать / продолжить черновик».</p>
 <p id="preparation-bridge-result" role="status" aria-live="polite"></p>

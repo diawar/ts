@@ -1,7 +1,8 @@
 {% extends 'core/base.html' %}
-{% block title %}Пользователи — Госзакупки{% endblock %}
+{% block title %}Пользователи — TenderSearch{% endblock %}
 {% block content %}
 <h1>Администрирование</h1>
+{% if show_lead_collection %}<p><a href="{% url 'administration_leads' %}">База e-mail компаний</a></p>{% endif %}
 <section class="panel user-create">
   <h2>Добавить пользователя</h2>
   <form method="post">
@@ -23,20 +24,21 @@
 <section class="panel user-list">
   <h2>Все пользователи <span class="muted">({{ users|length }})</span></h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>Логин</th><th>Имя</th><th>E-mail</th><th>Роль</th><th>Доступ к сайту</th><th>Статус</th><th>Telegram nick</th><th>Telegram name</th><th>Добавлен</th><th>Последний вход</th><th>Действия</th></tr></thead>
+    <thead><tr><th>Логин</th><th>Имя</th><th>E-mail</th><th>Роль</th><th>Доступ к сайту</th><th>Осталось дней</th><th>Статус</th><th>Telegram nick</th><th>Telegram name</th><th>Добавлен</th><th>Последний вход</th><th>Действия</th></tr></thead>
     <tbody>{% for account in users %}<tr>
       <td><strong>{{ account.username }}</strong></td>
       <td>{{ account.get_full_name|default:'—' }}</td>
       <td>{{ account.email|default:'—' }}</td>
       <td>{% if account.is_superuser %}Администратор{% else %}Пользователь{% endif %}</td>
       <td>{% if account.is_active %}Активен{% else %}Отключён{% endif %}</td>
-      <td>{{ account.telegram_status }}</td>
+      <td>{% if account.is_superuser %}Без ограничений{% else %}<a href="{% url 'administration_user_edit' account.pk %}">{{ account.access_days_left }} дн. · Изменить</a>{% endif %}</td><td>{{ account.telegram_status }}</td>
       <td>{% if account.telegram_nick %}<a href="https://t.me/{{ account.telegram_nick|urlencode }}" target="_blank" rel="noopener noreferrer">@{{ account.telegram_nick }}</a>{% else %}—{% endif %}</td>
       <td>{{ account.telegram_name|default:'—' }}</td>
       <td>{{ account.date_joined|date:'d.m.Y H:i' }}</td>
       <td>{{ account.last_login|date:'d.m.Y H:i'|default:'Не входил' }}</td>
       <td><div class="user-actions"><a href="{% url 'administration_user_edit' account.pk %}">Изменить</a>{% if account.pk != user.pk and account.username != 'admin' %}<a class="user-delete-link" href="{% url 'administration_user_delete' account.pk %}">Удалить</a>{% endif %}</div></td>
-    </tr>{% empty %}<tr><td colspan="11">Пользователей нет.</td></tr>{% endfor %}</tbody>
+    </tr>{% empty %}<tr><td colspan="12">Пользователей нет.</td></tr>{% endfor %}</tbody>
   </table></div>
 </section>
 {% endblock %}
+

@@ -245,7 +245,7 @@ class LeadCollectionTests(TestCase):
 @override_settings(LEAD_COLLECTION_AVAILABLE=True)
 class LeadAdministrationTests(TestCase):
     def setUp(self):
-        self.staff = get_user_model().objects.create_user('lead-admin', is_staff=True)
+        self.staff = get_user_model().objects.create_user('lead-admin', is_staff=True,is_superuser=True)
         self.user = get_user_model().objects.create_user('lead-user')
         self.company = LeadCompany.objects.create(identifier='123456789012', name='Alpha')
         self.url = '/administration/clients/'
@@ -257,6 +257,15 @@ class LeadAdministrationTests(TestCase):
                     f'/administration/clients/{self.company.pk}/']:
             self.assertEqual(self.client.get(url).status_code, 403)
         self.assertEqual(self.client.post(self.url, {'action': 'start'}).status_code, 403)
+        self.assertFalse(LeadCollectionState.objects.exists())
+
+    def test_legacy_staff_without_admin_role_cannot_access_or_export_client_base(self):
+        self.user.is_staff=True;self.user.save()
+        self.client.force_login(self.user)
+        for url in (self.url,'/administration/collection-status/','/administration/clients/export/',
+                    f'/administration/clients/{self.company.pk}/'):
+            self.assertEqual(self.client.get(url).status_code,403)
+        self.assertEqual(self.client.post(self.url,{'action':'start'}).status_code,403)
         self.assertFalse(LeadCollectionState.objects.exists())
 
     def test_staff_page_and_controls_do_not_make_source_requests(self):

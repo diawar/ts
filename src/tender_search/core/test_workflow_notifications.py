@@ -68,7 +68,7 @@ class WorkflowNotificationTests(TestCase):
             deliver_workflow_notifications();deliver_workflow_notifications()
         send.assert_called_once();self.assertIn('Договор подписан',send.call_args.args[1]['text'])
 
-    def test_paid_notification_survives_automatic_archive_and_stopped_watches(self):
+    def test_paid_notification_in_won_and_later_archive_does_not_repeat(self):
         self.won()
         result={'state':'paid','contract_id':90,'number':'900','status':'Executed'}
         self.contract_check(result)
@@ -76,11 +76,16 @@ class WorkflowNotificationTests(TestCase):
         LotShipment.objects.create(owner=self.owner,lot=self.lot,mode='own',act='accepted.pdf',shipped_at=timezone.now(),act_uploaded_at=timezone.now())
         self.contract_check(result)
         state=UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot)
-        self.assertEqual(state.stage,'archived');self.assertTrue(state.completed_at)
+        self.assertEqual(state.stage,'won');self.assertTrue(state.completed_at)
         self.assertFalse(LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot).enabled)
         with patch('tender_search.core.workflow_notifications.telegram_api',return_value={'message_id':3}) as send:
             deliver_workflow_notifications();deliver_workflow_notifications()
+            from .fulfillment import archive_due
+            UserLotWorkflow.objects.filter(pk=state.pk).update(stage_entered_at=timezone.now()-timedelta(days=31))
+            archive_due();deliver_workflow_notifications()
+        state.refresh_from_db();self.assertEqual(state.stage,'archived')
         send.assert_called_once();self.assertIn('Оплата получена',send.call_args.args[1]['text'])
+        self.assertIn('«Выиграли»',send.call_args.args[1]['text'])
 
     def test_nonparticipation_final_message_survives_watch_shutdown(self):
         self.lot.announcement.deadline=timezone.now()-timedelta(minutes=1);self.lot.announcement.save()

@@ -1,0 +1,6 @@
+{% extends 'public/base.html' %}{% load search_tags %}
+{% block content %}
+<section class="shell guides-intro"><nav class="breadcrumbs" aria-label="Навигация по разделам"><a href="{% url 'landing' %}">Главная</a><span aria-hidden="true">/</span><span aria-current="page">Статьи</span></nav><p class="eyebrow">БАЗА ЗНАНИЙ ПОСТАВЩИКА</p><h1>Тендеры и госзакупки.<br><em>Разбираемся по шагам.</em></h1><p class="guides-description">Практические статьи о поиске закупок в Казахстане, условиях участия, документах и работе с контрактами. Примеры, проверочные списки и ссылки на официальные источники.</p></section>
+<section class="shell guide-catalog" aria-label="Статьи о тендерах"><div class="guide-grid">{% for item in guides %}{% include 'public/_guide_card.html' %}{% endfor %}</div></section>
+<section class="bottom-cta shell"><div><p class="eyebrow">ОТ ТЕОРИИ К ВАШИМ ЗАКУПКАМ</p><h2>Сохраните подборку.<br>Начните работу в CRM.</h2></div><a class="btn" href="{% url 'register' %}">Попробовать 14 дней бесплатно {% icon 'arrow-right' %}</a></section>
+{% endblock %}

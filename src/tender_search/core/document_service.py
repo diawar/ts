@@ -54,15 +54,15 @@ def download_documents(lot_id, api):
             unchanged = previous is not None and previous.url == file.url
             doc, _ = Document.objects.update_or_create(announcement=lot.announcement,source_id=file.id,
                 defaults={'lot':lot if file.lot_id else None,'name':file.name,'url':file.url,'kind':'contract'})
-            cached = doc.versions.order_by('-pk').first()
+            cached = doc.current_version if doc.current_version_id else doc.versions.order_by('-pk').first()
             if unchanged and cached and cached.storage_path and stored_path(cached.storage_path).is_file():
                 Document.objects.filter(pk=doc.pk).update(status='ready',error='')
                 continue
             try:
                 Document.objects.filter(pk=doc.pk).update(status='downloading',error='')
                 result = api.download(file,Path(settings.MEDIA_ROOT))
-                DocumentVersion.objects.update_or_create(document=doc,sha256=result['sha256'],defaults={'storage_path':result['path']})
-                Document.objects.filter(pk=doc.pk).update(status='ready',error='')
+                version, _ = DocumentVersion.objects.update_or_create(document=doc,sha256=result['sha256'],defaults={'storage_path':result['path']})
+                Document.objects.filter(pk=doc.pk).update(current_version=version,status='ready',error='')
             except Exception as exc:
                 errors += 1
                 Document.objects.filter(pk=doc.pk).update(status='error',error=str(exc)[:200] if isinstance(exc,SourceError) else 'Не удалось скачать файл.')

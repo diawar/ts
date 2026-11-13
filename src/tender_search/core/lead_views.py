@@ -20,7 +20,8 @@ from .models import LeadCollectionState, LeadCompany, LeadEmail
 def require_staff(request):
     if not settings.LEAD_COLLECTION_AVAILABLE:
         raise Http404
-    if not request.user.is_staff:
+    from .user_admin import can_manage_users
+    if not can_manage_users(request.user):
         raise PermissionDenied
 
 

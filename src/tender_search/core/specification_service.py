@@ -4,14 +4,17 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from io import BytesIO
 from zipfile import ZipFile, BadZipFile
-from xml.etree import ElementTree
+from defusedxml import ElementTree
+from defusedxml.common import DefusedXmlException
 import re
 import secrets
 from django.conf import settings
+from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from pypdf import PdfReader
 from tender_search.client import SourceError
-from .models import LotSpecification,Document
+from .models import LotSpecification,Document,TechnicalDocumentIndex
 from .source import lot_client
 from .document_service import stored_path
 
@@ -38,7 +41,10 @@ def extract_text(path, name):
                 raise SourceError('Офисный документ слишком большой после распаковки.')
             if 'word/document.xml' not in archive.namelist():
                 raise SourceError('Поддерживается текст PDF, DOCX и TXT. Этот архив не является DOCX.')
-            root=ElementTree.fromstring(archive.read('word/document.xml'))
+            try:
+                root=ElementTree.fromstring(archive.read('word/document.xml'),forbid_dtd=True)
+            except DefusedXmlException as exc:
+                raise SourceError('DOCX содержит запрещённые XML-объявления.') from exc
             ns={'w':'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
             text='\n'.join(''.join(p.itertext()) for p in root.findall('.//w:p',ns))
     elif name.casefold().endswith('.txt'):
@@ -50,15 +56,45 @@ def extract_text(path, name):
     return text[:MAX_TEXT],len(text)>MAX_TEXT
 
 
-def queue_specification(owner, lot):
+def cached_documents(lot):
+    # Only a complete shared index proves that no required file is missing.
+    if not TechnicalDocumentIndex.objects.filter(lot=lot,state='ready',
+            checked_at__gt=timezone.now()-timedelta(days=1)).exists():
+        return []
+    files=list(Document.objects.filter(announcement_id=lot.announcement_id,kind='technical').filter(
+        Q(lot_id=lot.pk)|Q(lot__isnull=True)).select_related('current_version').order_by('pk')[:9])
+    if not files or len(files)>8:return []
+    result=[]
+    for file in files:
+        version=file.current_version
+        if file.status!='ready' or not version or not version.text:return []
+        result.append({'name':file.name,'text':version.text,'source_url':file.url,
+                       'scope':'lot' if file.lot_id else 'announcement',
+                       'truncated':bool(version.pages and version.pages[0].get('truncated'))})
+    return result
+
+
+def queue_specification(owner, lot, *, refresh=False):
     from .tasks import extract_lot_specification
-    job,_=LotSpecification.objects.get_or_create(owner=owner,lot=lot)
-    if job.state in ('queued','running') and job.generation and job.updated_at>timezone.now()-timedelta(minutes=15):return
-    generation=secrets.token_hex(16)
-    LotSpecification.objects.filter(pk=job.pk).update(state='queued',generation=generation,error='',updated_at=timezone.now())
+    with transaction.atomic():
+        job,_=LotSpecification.objects.get_or_create(owner=owner,lot=lot)
+        job=LotSpecification.objects.select_for_update().get(pk=job.pk)
+        if job.state in ('queued','running') and job.generation and job.updated_at>timezone.now()-timedelta(minutes=15):return job
+        if not refresh:
+            if job.state=='done' and job.documents:return job
+            documents=cached_documents(lot)
+            if documents:
+                job.documents=documents;job.state='done';job.error='';job.generation=secrets.token_hex(16)
+                job.save(update_fields=['documents','state','error','generation','updated_at'])
+                return job
+        generation=secrets.token_hex(16)
+        job.state='queued';job.generation=generation;job.error=''
+        job.save(update_fields=['state','generation','error','updated_at'])
     try:extract_lot_specification.delay(job.pk,generation)
     except Exception:
         LotSpecification.objects.filter(pk=job.pk,generation=generation).update(state='error',error='Очередь извлечения недоступна. Повторите позже.')
+        job.refresh_from_db()
+    return job
 
 
 def process_specification(job_id, generation):

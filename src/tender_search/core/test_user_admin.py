@@ -21,13 +21,13 @@ class UserAdministrationTests(TestCase):
         self.assertEqual(self.client.get('/administration/').status_code, 302)
         for user in (self.member,):
             self.client.force_login(user)
-            self.assertNotContains(self.client.get('/'), 'href="/administration/"')
+            self.assertNotContains(self.client.get('/main/'), 'href="/administration/"')
             self.assertEqual(self.client.get('/administration/').status_code, 403)
             self.assertEqual(self.client.post('/administration/', self.data()).status_code, 403)
             self.assertEqual(self.client.get('/search/index-status/').status_code, 403)
         self.assertEqual(get_user_model().objects.count(), 3)
         self.client.force_login(self.admin)
-        self.assertContains(self.client.get('/'), 'href="/administration/"')
+        self.assertContains(self.client.get('/main/'), 'href="/administration/"')
         response = self.client.get('/administration/')
         self.assertContains(response, 'Все пользователи')
         self.assertEqual(set(response.context['users'].values_list('username', flat=True)),
@@ -48,12 +48,40 @@ class UserAdministrationTests(TestCase):
     def test_invalid_duplicate_and_mismatched_passwords_do_not_create_users(self):
         self.client.force_login(self.admin)
         for data in (self.data(username='ADMIN'), self.data(password2='different'),
-                     self.data(password1='123', password2='123')):
+                     self.data(password1='123', password2='123'),
+                     self.data(email=''), self.data(email='invalid-address')):
             response = self.client.post('/administration/', data)
             self.assertEqual(response.status_code, 200)
             self.assertTrue(response.context['form'].errors)
             self.assertNotContains(response, 'value="'+data['password1']+'"')
         self.assertEqual(get_user_model().objects.count(), 3)
+
+    def test_email_is_unique_on_creation_and_editing_ignoring_case(self):
+        self.member.email = 'Existing@Example.com'
+        self.member.save()
+        self.client.force_login(self.admin)
+        response = self.client.post('/administration/', self.data(email=' existing@EXAMPLE.com '))
+        self.assertContains(response, 'Этот e-mail уже используется другим аккаунтом.')
+        self.assertFalse(get_user_model().objects.filter(username='new-user').exists())
+        response = self.client.post(self.edit_path(self.other_admin), {
+            'username': self.other_admin.username, 'role': 'admin',
+            'is_active': 'on', 'email': 'EXISTING@example.com'})
+        self.assertContains(response, 'Этот e-mail уже используется другим аккаунтом.')
+        self.other_admin.refresh_from_db()
+        self.assertEqual(self.other_admin.email, '')
+        response = self.client.post(self.edit_path(self.member), {
+            'username': self.member.username, 'role': 'user',
+            'is_active': 'on', 'email': ' EXISTING@Example.com '})
+        self.assertRedirects(response, '/administration/')
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.email, 'existing@example.com')
+
+    def test_database_rejects_duplicate_email_including_surrounding_spaces(self):
+        from django.db import IntegrityError, transaction
+        self.member.email = 'member@example.com'
+        self.member.save()
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            get_user_model().objects.create_user('duplicate-email', email=' MEMBER@example.com ')
 
     def test_csrf_is_required_even_for_admin(self):
         client = Client(enforce_csrf_checks=True)
@@ -116,7 +144,7 @@ class UserAdministrationTests(TestCase):
         self.assertRedirects(response, '/administration/')
         self.member.refresh_from_db()
         self.assertTrue(self.member.check_password('new-secret-916!'))
-        self.assertEqual(old_session.get('/').status_code, 302)
+        self.assertEqual(old_session.get('/main/').status_code, 302)
 
     def test_admin_cannot_be_removed_disabled_or_renamed(self):
         self.client.force_login(self.admin)

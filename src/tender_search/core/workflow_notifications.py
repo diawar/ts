@@ -1,4 +1,5 @@
 """Durable notifications for verified events, separate from status watch lifetime."""
+from .access import eligible_user_ids
 from datetime import timedelta
 from hashlib import sha256
 from html import escape
@@ -33,7 +34,7 @@ def queue_event(owner_id, lot, company_bin, kind, reference, label=None):
     contract=f'Договор № {label}. ' if label else ''
     detail={'submitted': f'Заявка № {label}. Подача подтверждена на Госзакупе.',
             'signed': contract+'Подписание договора подтверждено; лот перешёл в поставку.',
-            'paid': contract+'Подтверждены полное исполнение и оплата. Лот завершён и перенесён в архив.'}[kind]
+            'paid': contract+'Подтверждены полное исполнение и оплата. Лот перенесён в «Выиграли»; через 30 дней перейдёт в архив.'}[kind]
     payload={'text':f'<b>{TITLES[kind]}</b>\n\nЛот: <code>{esc(lot.number)}</code>\n<b>{esc(lot.name[:500])}</b>\nБИН: <code>{esc(company_bin)}</code>\n\n{esc(detail)}',
              'parse_mode':'HTML','link_preview_options':{'is_disabled':True},
              'reply_markup':{'inline_keyboard':[[{'text':'Открыть на Госзакупе ↗','url':lot.portal_url}]]}}
@@ -47,14 +48,14 @@ def deliver_workflow_notifications():
     now=timezone.now()
     WorkflowDelivery.objects.filter(state='sending',updated_at__lt=now-timedelta(minutes=5)).update(
         state='uncertain',error='Доставка не подтверждена; повтор отключён.')
-    rows=WorkflowDelivery.objects.filter(state='pending').filter(Q(retry_at__isnull=True)|Q(retry_at__lte=now)).select_related('owner').order_by('created_at','pk')
+    rows=WorkflowDelivery.objects.filter(state='pending',owner_id__in=eligible_user_ids()).filter(Q(retry_at__isnull=True)|Q(retry_at__lte=now)).select_related('owner').order_by('created_at','pk')
     for delivery in rows[:20]:
         workflow=UserLotWorkflow.objects.filter(owner_id=delivery.owner_id,lot_id=delivery.lot_id).first()
         bin_matches=CompanySettings.objects.filter(owner_id=delivery.owner_id,company_bin=delivery.company_bin).exists()
         relevant=bool(workflow and (
             (delivery.kind=='submitted' and workflow.stage=='applied') or
             (delivery.kind=='signed' and workflow.stage=='delivery' and workflow.outcome=='won') or
-            (delivery.kind=='paid' and workflow.stage=='archived' and workflow.completed_at)))
+            (delivery.kind=='paid' and workflow.stage in ('won','archived') and workflow.completed_at)))
         sub=TelegramSubscription.objects.filter(owner_id=delivery.owner_id,enabled=True,chat_id__isnull=False).first()
         if not delivery.owner.is_active or not bin_matches or not relevant or not sub or delivery.created_at<now-timedelta(days=1):
             WorkflowDelivery.objects.filter(pk=delivery.pk,state='pending').update(state='cancelled')
@@ -72,3 +73,4 @@ def deliver_workflow_notifications():
                 TelegramSubscription.objects.filter(pk=sub.pk).update(enabled=False)
                 cancel_pending(delivery.owner_id)
             WorkflowDelivery.objects.filter(pk=delivery.pk).update(state='uncertain' if exc.code==0 else 'error',error=f'Telegram: {exc.code}')
+

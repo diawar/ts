@@ -16,6 +16,7 @@ dependencies = [
     "gunicorn>=23,<24; sys_platform != 'win32'",
     "whitenoise>=6.8,<7",
     "pypdf>=6,<7",
+    "defusedxml>=0.7.1,<0.8",
     "pymorphy3>=2,<3",
 ]
 

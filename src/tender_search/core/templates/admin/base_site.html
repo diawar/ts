@@ -1,8 +1,8 @@
 {% extends "admin/base.html" %}{% load static search_tags %}
-{% block extrahead %}{{ block.super }}<link rel="icon" type="image/svg+xml" href="{% static 'core/favicon.svg' %}?v=goszakupki-black">{% endblock %}
-{% block title %}{{ title }} — Госзакупки{% endblock %}
+{% block extrahead %}{{ block.super }}<link rel="icon" type="image/svg+xml" href="{% static 'core/favicon.svg' %}?v=tendersearch-ts">{% endblock %}
+{% block title %}{{ title }} — TenderSearch{% endblock %}
 {% block dark-mode-vars %}{% endblock %}
-{% block branding %}<a class="ts-brand" href="{% url 'dashboard' %}">Гос<span>закупки</span></a><span class="ts-caption">Администрирование</span>{% endblock %}
+{% block branding %}<a class="ts-brand" href="{% url 'dashboard' %}">Tender<span>Search</span></a><span class="ts-caption">Администрирование</span>{% endblock %}
 {% block usertools %}{% if has_permission %}<div id="user-tools"><span class="ts-avatar">{{ user.username|first|upper }}</span><strong>{{ user.username }}</strong><a href="{% url 'admin:password_change' %}">Изменить пароль</a><form id="logout-form" method="post" action="{% url 'admin:logout' %}">{% csrf_token %}<button type="submit">Выйти</button></form></div>{% endif %}{% endblock %}
 {% block nav-global %}{% if has_permission %}<aside class="ts-sidebar"><a href="{% url 'dashboard' %}">{% icon 'layout-dashboard' %} Главная</a><a href="{% url 'search' %}">{% icon 'search' %} Поиск закупок</a><a href="{% url 'favorites' %}">{% icon 'star' %} Избранное</a><a href="{% url 'notification_settings' %}">{% icon 'settings' %} Настройки</a><a class="active" href="{% url 'admin:index' %}">{% icon 'settings' %} Администрирование</a></aside>{% endif %}{% endblock %}
 {% block responsive %}{{ block.super }}<link rel="stylesheet" href="{% static 'core/admin.css' %}">{% endblock %}

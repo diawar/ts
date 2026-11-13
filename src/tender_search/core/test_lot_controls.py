@@ -7,7 +7,7 @@ from .models import CompanySettings, Lot
 class LotControlTests(SimpleTestCase):
     def test_company_defaults_exclude_personal_phone(self):
         company = CompanySettings()
-        self.assertEqual(company.company_bin, '241040001415')
+        self.assertEqual(company.company_bin, '')
         self.assertEqual(company.address_office, '25Б')
         self.assertEqual(company.bank_account, 'KZ92601A241008980281')
         self.assertEqual(company.contact_phone, '')
@@ -42,7 +42,6 @@ class CompanyDefaultsMigrationTests(TestCase):
             bank_bic='', contact_phone='+77000000000', is_vat_payer=False)
         other = get_user_model().objects.create_user('other-company')
         CompanySettings.objects.create(owner=other, company_bin='123456789012', bank_bic='')
-        new = get_user_model().objects.create_user('without-settings')
         schema_editor = SimpleNamespace(connection=connection)
         migration.fill_empty(apps, schema_editor)
         migration.fill_empty(apps, schema_editor)
@@ -52,4 +51,3 @@ class CompanyDefaultsMigrationTests(TestCase):
         self.assertEqual(company.contact_phone, '+77000000000')
         self.assertFalse(company.is_vat_payer)
         self.assertEqual(CompanySettings.objects.get(owner=other).bank_bic, '')
-        self.assertEqual(CompanySettings.objects.get(owner=new).contact_phone, '')

@@ -1,0 +1,5 @@
+{% if items %}<nav class="pagination numbered-pagination{% if public %} catalog-pagination{% endif %}" aria-label="Навигация по страницам">
+{% if previous %}<a class="pagination-arrow" href="{{ previous }}" rel="prev" aria-label="Предыдущая страница">← Назад</a>{% else %}<span class="pagination-arrow" aria-disabled="true">← Назад</span>{% endif %}
+{% for item in items %}{% if item.ellipsis %}<span class="pagination-ellipsis" aria-hidden="true">…</span>{% elif item.current %}<span class="page-number current" aria-current="page" aria-label="Текущая страница {{ item.number }}">{{ item.number }}</span>{% else %}<a class="page-number" href="{{ item.url }}" aria-label="Страница {{ item.number }}">{{ item.number }}</a>{% endif %}{% endfor %}
+{% if next %}<a class="pagination-arrow" href="{{ next }}" rel="next" aria-label="Следующая страница">Далее →</a>{% else %}<span class="pagination-arrow" aria-disabled="true">Далее →</span>{% endif %}
+</nav>{% endif %}

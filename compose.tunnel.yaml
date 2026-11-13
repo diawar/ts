@@ -4,15 +4,19 @@ services:
   tunnel-web:
     image: tendersearch:local
     pull_policy: never
-    command: [gunicorn, tender_search.web.wsgi:application, --bind, "0.0.0.0:8000", --workers, "1", --threads, "2", --timeout, "60", --forwarded-allow-ips, "*", --access-logfile, "-"]
+    command: [gunicorn, tender_search.web.wsgi:application, --bind, "0.0.0.0:8000", --workers, "1", --threads, "2", --timeout, "60", --forwarded-allow-ips, "*", --access-logfile, "-", --access-logformat, "%(t)s %(m)s %(s)s %(L)s"]
     environment:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Local environment required}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Local environment required}
       POSTGRES_HOST: db
       DJANGO_ALLOWED_HOSTS: ${TUNNEL_HOST:?Generated tunnel hostname required}
+      PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-}
+      AUTH_SITE_URL: https://${TUNNEL_HOST}
+      AUTH_TRUST_CLOUDFLARE_IP: "1"
       CSRF_TRUSTED_ORIGINS: https://${TUNNEL_HOST}
       HTTPS_ENABLED: "1"
       REDIS_URL: redis://redis:6379/0
+      LEAD_COLLECTION_AVAILABLE: ${LEAD_COLLECTION_AVAILABLE:-0}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
     volumes:

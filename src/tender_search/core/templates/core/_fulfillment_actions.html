@@ -1,4 +1,7 @@
 {% if lot.workflow.stage in 'won,lost,contract,delivery,payment' %}<p class="muted">Этап: {{ lot.workflow.get_stage_display }}</p>{% endif %}
+{% if lot.workflow.stage == 'won' or lot.workflow.stage == 'lost' or lot.workflow.stage == 'not_participated' %}
+<p class="muted">Автоматический перенос в архив — через 30 дней после перехода в этот этап.</p>
+{% endif %}
 {% if lot.contract_watch %}
 {% if lot.contract_watch.error %}<p role="status">{{ lot.contract_watch.error }}</p>{% endif %}
 {% if lot.contract_watch.evidence.number %}<p class="muted">Договор {{ lot.contract_watch.evidence.number }} · {{ lot.contract_watch.evidence.status }} · Проверено {{ lot.contract_watch.checked_at|date:'d.m.Y H:i' }}</p>{% endif %}

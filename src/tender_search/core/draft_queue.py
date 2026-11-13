@@ -22,6 +22,18 @@ def expire_draft_queue(owner=None):
     if owner is not None:items=items.filter(owner=owner)
     for pk in list(items.values_list('pk',flat=True)):
         items.filter(pk=pk).update(state='cancelled',generation=uuid.uuid4(),message='Исключён из очереди: приём заявок завершён.',updated_at=timezone.now())
+    # Queue cancellation and CRM stage are separate records. Repair even old
+    # cancelled/completed queue entries, preserving preparation and portal evidence.
+    closed=UserLotWorkflow.objects.filter(stage='preparing',lot__announcement__deadline__lte=timezone.now())
+    if owner is not None:closed=closed.filter(owner=owner)
+    for pk,owner_id in list(closed.values_list('pk','owner_id')):
+        with transaction.atomic():
+            list(SearchProfile.objects.select_for_update().filter(owner_id=owner_id).order_by('pk'))
+            state=closed.select_for_update().filter(pk=pk).first()
+            if not state:continue
+            update_workflow(owner_id,state.lot_id,stage='interesting',expired_from_stage='',result_tracking=True)
+            from .outcome_service import register_watch
+            register_watch(owner_id,state.lot_id)
 
 
 @login_required
@@ -134,7 +146,8 @@ def progress(request,item_id):
             from django.template.loader import render_to_string
             item.progress_phase=snapshot_phase(snapshot,item.progress_phase)
             item.state=state;item.message=str(snapshot.get('message',''))[:500];item.save(update_fields=['state','message','progress_phase','updated_at'])
-            return JsonResponse({'saved':True,'state':item.state,'label':item.get_state_display(),'steps_html':render_to_string('core/_draft_progress.html',{'item':item})})
+            workflow_stage=UserLotWorkflow.objects.filter(owner=request.user,lot_id=item.lot_id).values_list('stage',flat=True).first()
+            return JsonResponse({'saved':True,'state':item.state,'workflow_stage':workflow_stage,'label':item.get_state_display(),'steps_html':render_to_string('core/_draft_progress.html',{'item':item})})
     except (ValueError,TypeError,KeyError,CompanySettings.DoesNotExist):
         return JsonResponse({'error':'Прогресс не сохранён: проверьте аккаунт, БИН и актуальность очереди.'},status=400)
 
@@ -200,6 +213,10 @@ def restart(request,item_id):
         saved.portal_state='unconfirmed';saved.portal_number='';saved.portal_url='';saved.portal_checked_at=None
         saved.portal_confirmed_at=None;saved.portal_description_saved_at=None;saved.portal_sync_error=''
         saved.save()
+        if UserLotWorkflow.objects.filter(owner=request.user,lot_id=item.lot_id,stage='awaiting_results').exists():
+            update_workflow(request.user.pk,item.lot_id,stage='preparing',result_tracking=False)
+            from .fulfillment import pause_outcome
+            pause_outcome(request.user.pk,item.lot_id)
         item.portal_check={**check,'state':'requeued','label':'Возвращён в очередь после проверки отсутствия','number':number}
         item.generation=uuid.uuid4();item.state='queued';item.progress_phase='';item.message='Подготовка сохранена. Можно запускать очередь заново.';item.save()
         messages.success(request,'Лот возвращён в очередь. Данные товара сохранены; нажмите «Запустить очередь».')

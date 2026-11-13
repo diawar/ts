@@ -106,7 +106,10 @@
     try {
       const response = await fetch(form.action, {method: 'POST', body: new FormData(form), credentials: 'same-origin', headers: {'X-Lot-Async': '1'}, signal: AbortSignal.timeout(20000)});
       if (!response.ok || response.redirected) throw new Error('submit');
-      await response.json();
+      const data = await response.json();
+      if (data.specification_html) {
+        replaceRegion('lot-specification', new DOMParser().parseFromString(data.specification_html, 'text/html'));
+      }
       pending = true;
       // Force a fresh region even if a duplicate request found an existing job.
       if (form.closest('#lot-specification')) revisions.specification = '';

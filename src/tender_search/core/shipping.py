@@ -1,4 +1,4 @@
-"""Personal delivery state with shared acceptance documents."""
+"""Personal delivery state and owner-only acceptance documents."""
 from pathlib import Path
 from uuid import uuid4
 
@@ -33,8 +33,8 @@ class ShipmentForm(forms.ModelForm):
 
 def context(owner, lot):
     state = lot.workflow if hasattr(lot, 'workflow') else UserLotWorkflow.objects.filter(owner=owner, lot=lot).first()
-    shared = {'shared_acts': LotShipment.objects.filter(lot=lot).exclude(act='').order_by('-act_uploaded_at')}
-    if not state or state.stage not in ('delivery', 'payment', 'archived'):
+    shared = {'shared_acts': LotShipment.objects.filter(owner=owner,lot=lot).exclude(act='').order_by('-act_uploaded_at')}
+    if not state or state.stage not in ('delivery', 'payment', 'won', 'archived'):
         return shared
     shipment = LotShipment.objects.filter(owner=owner, lot=lot).first()
     return {**shared, 'shipment': shipment, 'shipment_form': ShipmentForm(instance=shipment),
@@ -100,10 +100,15 @@ def upload_act(request, lot_id):
 
 @login_required
 def download_act(request, lot_id):
-    shipment = get_object_or_404(LotShipment, pk=request.GET.get('act'), lot_id=lot_id)
+    identifier=request.GET.get('act','')
+    if not identifier.isdecimal() or len(identifier)>18:
+        raise Http404
+    shipment = get_object_or_404(LotShipment, pk=identifier, lot_id=lot_id,owner=request.user)
     if not shipment.act:
         raise Http404
     try:
-        return FileResponse(shipment.act.open('rb'), as_attachment=True, filename='act' + Path(shipment.act.name).suffix)
+        response=FileResponse(shipment.act.open('rb'), as_attachment=True, filename='act' + Path(shipment.act.name).suffix)
+        response['Cache-Control']='private, no-store'
+        return response
     except FileNotFoundError:
         raise Http404

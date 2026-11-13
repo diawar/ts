@@ -1,9 +1,32 @@
 import re
 from tender_search.matching import normalize, prepared_phrase
 from django import template
+from django.http import QueryDict
 from django.utils.html import format_html_join, format_html
 
 register = template.Library()
+
+
+@register.inclusion_tag('core/_numbered_pagination.html', takes_context=True)
+def numbered_pagination(context, page, anchor='', public=False):
+    if not page or page.paginator.num_pages < 2:
+        return {}
+    request = context['request']
+    def link(number):
+        query = QueryDict(mutable=True) if public else request.GET.copy()
+        if public and number == 1:
+            query.pop('page', None)
+        else:
+            query['page'] = number
+        if not public and context.get('per_page'):
+            query['per_page'] = context['per_page']
+        encoded = query.urlencode()
+        return request.path + ('?' + encoded if encoded else '') + ('#' + anchor if anchor else '')
+    items = [{'ellipsis': True} if number == page.paginator.ELLIPSIS else
+             {'number': number, 'url': link(number), 'current': number == page.number}
+             for number in page.paginator.get_elided_page_range(page.number, on_each_side=2, on_ends=1)]
+    return {'items': items, 'public': public, 'previous': link(page.previous_page_number()) if page.has_previous() else '',
+            'next': link(page.next_page_number()) if page.has_next() else ''}
 
 
 @register.simple_tag(name='budget_unit_price')

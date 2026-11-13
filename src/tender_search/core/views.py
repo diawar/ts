@@ -1,9 +1,9 @@
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
-from django.db import connection, transaction
+from django.db import connection, transaction, IntegrityError
 from django.db.models import DateTimeField, F, Q, Value, OuterRef, Subquery
 from django.db.models.fields.json import KeyTextTransform
-from django.db.models.functions import Cast, NullIf
+from django.db.models.functions import Cast, NullIf, Coalesce
 from django.http import JsonResponse, FileResponse, Http404
 from django.shortcuts import render
 from django.shortcuts import get_object_or_404, redirect
@@ -29,6 +29,14 @@ def index_status(request):
     if not can_manage_users(request.user):
         raise PermissionDenied
     return render(request, 'core/_index_coverage.html')
+
+
+def account_identity(request):
+    from django.utils.cache import patch_vary_headers
+    response = JsonResponse({'user_id': str(request.user.pk) if request.user.is_authenticated else None})
+    response['Cache-Control'] = 'no-store, private'
+    patch_vary_headers(response, ['Cookie'])
+    return response
 
 
 @login_required
@@ -68,6 +76,8 @@ def search(request):
                     filters={"form": values, "specification": form.specification()})
                 if request.POST.get("profile_id"):
                     profile = get_object_or_404(SearchProfile.objects.select_for_update(), pk=request.POST["profile_id"], owner=request.user)
+                    if not request.POST.get("profile_name", "").strip():
+                        settings["name"] = profile.name
                     if profile.filters != settings["filters"]:
                         profile.collection_revision += 1
                         profile.collection_enabled = True
@@ -107,6 +117,20 @@ def search(request):
                 job.save(update_fields=["status", "error", "finished_at"])
             return redirect(f"{reverse('search_results', kwargs={'job_id': job.pk})}#search-results")
     return render(request, "core/search.html", {"form": form, "active_profile": profile, "profile_saved": bool(profile) and not form.is_bound, "profiles": SearchProfile.objects.filter(owner=request.user).order_by("-updated_at"), "recent": WebSearch.objects.filter(owner=request.user, specification__monitor_profile_id__isnull=True, specification__collection_profile_id__isnull=True).order_by("-created_at")[:7]})
+
+
+@login_required
+@require_POST
+def profile_rename(request, profile_id):
+    from .forms import ProfileNameForm
+    profile = get_object_or_404(SearchProfile, pk=profile_id, owner=request.user)
+    form = ProfileNameForm(request.POST)
+    if not form.is_valid():
+        return JsonResponse({'error': form.errors['name'][0]}, status=400)
+    name = form.cleaned_data['name']
+    # Rename independently of filters and monitor leases, including concurrent refreshes.
+    SearchProfile.objects.filter(pk=profile.pk, owner=request.user).update(name=name, updated_at=timezone.now())
+    return JsonResponse({'name': name})
 
 
 @login_required
@@ -350,7 +374,7 @@ def lot_detail(request, lot_id, price_form=None, updates=False):
     documents = []
     if lot.is_favorite or lot.is_archived:
         latest = DocumentVersion.objects.filter(document_id=OuterRef('pk')).order_by('-pk').values('pk')[:1]
-        for doc in Document.objects.filter(announcement=lot.announcement).filter(Q(lot=lot)|Q(lot__isnull=True)).annotate(saved_version_id=Subquery(latest)).order_by('name'):
+        for doc in Document.objects.filter(announcement=lot.announcement).filter(Q(lot=lot)|Q(lot__isnull=True)).annotate(saved_version_id=Coalesce(F('current_version_id'), Subquery(latest))).order_by('name'):
             documents.append(doc)
     specification = LotSpecification.objects.filter(owner=request.user,lot=lot).first()
     expire_lot_jobs(lot, batch, specification)
@@ -366,9 +390,14 @@ def lot_detail(request, lot_id, price_form=None, updates=False):
 def lot_specification_extract(request, lot_id):
     from .specification_service import queue_specification
     lot=get_object_or_404(Lot,pk=lot_id)
-    queue_specification(request.user,lot)
+    specification=queue_specification(request.user,lot,refresh=request.POST.get('refresh')=='1')
     if request.headers.get('X-Lot-Async') == '1':
-        return JsonResponse({'queued': True})
+        from django.template.loader import render_to_string
+        pending=specification.state in ('queued','running')
+        response=JsonResponse({'queued':pending,'specification_html':render_to_string('core/_lot_specification.html',{
+            'lot':lot,'specification':specification,'specification_pending':pending},request=request)})
+        response['Cache-Control']='private, no-store'
+        return response
     target=reverse('lot_detail',kwargs={'lot_id':lot.pk})
     back=request.POST.get('next','')
     if back and url_has_allowed_host_and_scheme(back,allowed_hosts={request.get_host()},require_https=request.is_secure()):
@@ -508,6 +537,7 @@ def notification_settings(request):
     from .forms import CompanySettingsForm
     company, _ = CompanySettings.objects.get_or_create(owner=request.user)
     company_form = CompanySettingsForm(request.POST if request.method == 'POST' and request.POST.get('action') == 'company' else None,
+        owner=request.user,
         initial={key:getattr(company,key,True if key == 'is_vat_payer' else '') for key in CompanySettingsForm.base_fields})
     sub = TelegramSubscription.objects.filter(owner=request.user).first()
     link = None
@@ -516,14 +546,20 @@ def notification_settings(request):
             if company_form.is_valid():
                 from .outcome_service import reset_company
                 from django.contrib import messages
-                with transaction.atomic():
-                    reset_company(request.user.pk, company_form.cleaned_data['company_bin'])
-                    current=CompanySettings.objects.select_for_update().get(owner=request.user)
-                    for key,value in company_form.cleaned_data.items():
-                        if key!='company_bin' and (key in request.POST or (key=='legal_address' and any(name in request.POST for name in ('address_city','address_street','address_house','address_office')))):setattr(current,key,value)
-                    current.save()
-                messages.success(request, 'Реквизиты компании сохранены.')
-                return redirect('notification_settings')
+                try:
+                    with transaction.atomic():
+                        reset_company(request.user.pk, company_form.cleaned_data['company_bin'])
+                        current=CompanySettings.objects.select_for_update().get(owner=request.user)
+                        for key,value in company_form.cleaned_data.items():
+                            if key!='company_bin' and (key in request.POST or (key=='legal_address' and any(name in request.POST for name in ('address_city','address_street','address_house','address_office')))):setattr(current,key,value)
+                        current.save()
+                except IntegrityError:
+                    if not CompanySettings.objects.filter(company_bin=company_form.cleaned_data['company_bin']).exclude(owner=request.user).exists():
+                        raise
+                    company_form.add_error('company_bin', 'Этот БИН уже используется другим аккаунтом.')
+                else:
+                    messages.success(request, 'Реквизиты компании сохранены.')
+                    return redirect('notification_settings')
         elif request.POST.get("action") == "connect" and settings.TELEGRAM_POLLING_ENABLED and settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_USERNAME:
             link = connection_link(request.user)
             sub = TelegramSubscription.objects.get(owner=request.user)

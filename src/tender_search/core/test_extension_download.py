@@ -18,6 +18,7 @@ class ExtensionDownloadTests(TestCase):
             self.assertEqual(set(archive.namelist()),{'goszakup-assistant/'+name for name in FILES})
             manifest=json.loads(archive.read('goszakup-assistant/manifest.json'))
             self.assertEqual(manifest['manifest_version'],3)
+            self.assertEqual(manifest['version'],'0.17.0')
             self.assertEqual(set(manifest['permissions']),{'activeTab','scripting','storage','alarms'})
             self.assertEqual(manifest['background']['service_worker'],'background.js')
             self.assertEqual(manifest['host_permissions'], ['https://zakup.gov.kz/*'])

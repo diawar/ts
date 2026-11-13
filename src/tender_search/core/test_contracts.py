@@ -110,7 +110,7 @@ class ContractWorkflowTests(TestCase):
         from .models import UserLotPrice
         UserLotPrice.objects.create(owner=self.owner,lot=self.lot,unit_gross=116,vat_rate=16,locked_at=timezone.now())
         CompanySettings.objects.update_or_create(owner=self.owner,defaults={'company_bin':'241040001415'})
-        self.state=update_workflow(self.owner.pk,self.lot.pk,stage='won',outcome='won',result_tracking=True)
+        self.state=update_workflow(self.owner.pk,self.lot.pk,stage='contract',outcome='won',result_tracking=True)
         from .outcome_service import register_watch
         self.verdict=register_watch(self.owner.pk,self.lot.pk)
         self.verdict.state='won';self.verdict.company_bin='241040001415';self.verdict.winner_bin='241040001415'
@@ -125,13 +125,16 @@ class ContractWorkflowTests(TestCase):
             check_contract(self.watch.pk,'test')
         self.state.refresh_from_db();self.watch.refresh_from_db()
 
-    def test_confirmed_progress_and_archive_preserve_won_filter(self):
+    def test_confirmed_progress_is_exclusive_and_won_only_after_completion(self):
         from .models import LotShipment
-        LotShipment.objects.create(owner=self.owner,lot=self.lot,act='private-acts/accepted.pdf')
+        LotShipment.objects.create(owner=self.owner,lot=self.lot,act='private-acts/accepted.pdf',
+            shipped_at=timezone.now(),act_uploaded_at=timezone.now())
         for target in ('contract','delivery','payment','paid'):
             self.run_check({'state':target,'number':'contract','status':'status'})
-            self.assertEqual(self.state.stage,'archived' if target=='paid' else target)
+            self.assertEqual(self.state.stage,'won' if target=='paid' else target)
             self.assertEqual(self.state.outcome,'won')
+            page=self.client.get('/workspace/',{'stage':'won'})
+            self.assertEqual(page.context['page'].paginator.count,1 if target=='paid' else 0)
         self.assertTrue(self.state.completed_at)
         self.assertFalse(LotOutcomeWatch.objects.get(pk=self.verdict.pk).enabled)
         page=self.client.get('/workspace/',{'stage':'won'})
@@ -147,6 +150,7 @@ class ContractWorkflowTests(TestCase):
 
     def test_archive_during_request_fences_response(self):
         def archive(*args):
+            update_workflow(self.owner.pk,self.lot.pk,stage='lost',outcome='lost')
             advance(self.owner.pk,self.lot.pk,'archive')
             return {'state':'delivery'}
         self.run_check({},side_effect=archive)
@@ -158,12 +162,13 @@ class ContractWorkflowTests(TestCase):
             reset_company(self.owner.pk,'123456789012')
             return {'state':'delivery'}
         self.run_check({},side_effect=change)
-        self.assertEqual(self.state.stage,'applied')
+        self.assertEqual(self.state.stage,'contract')
+        self.assertEqual(self.state.outcome,'')
 
     def test_no_fresh_verdict_no_advance(self):
         self.verdict.checked_at=timezone.now()-timedelta(days=2);self.verdict.save()
         self.run_check({'state':'delivery'})
-        self.assertEqual(self.state.stage,'won')
+        self.assertEqual(self.state.stage,'contract')
         self.assertEqual(self.watch.state,'review')
 
     def test_new_bin_clears_previous_result_without_rewinding_delivery(self):
@@ -191,8 +196,8 @@ class ContractWorkflowTests(TestCase):
 
     def test_review_preserves_stage_and_ordinary_user_bin_banner(self):
         self.run_check({},side_effect=ContractReview('Требуется проверка'))
-        self.assertEqual(self.state.stage,'won')
-        self.assertContains(self.client.get('/workspace/',{'stage':'won'}),'Требуется проверка')
+        self.assertEqual(self.state.stage,'contract')
+        self.assertContains(self.client.get('/workspace/',{'stage':'contract'}),'Требуется проверка')
         self.client.force_login(self.other)
         CompanySettings.objects.update_or_create(owner=self.other, defaults={'company_bin': ''})
         self.assertContains(self.client.get('/settings/'),'Укажите БИН организации')

@@ -65,9 +65,15 @@ function renderDraft(job){
  document.querySelector('#draft-stop').disabled=!active;
  document.querySelector('#draft-clear').disabled=!job||active;
  document.querySelector('#status').disabled=active;
+ if(!job){
+  displayedDraftKey=undefined;statusReport=null;
+  for(const name of ['company_bin','announcement_number','lot_number'])document.querySelector('#'+name).value='';
+  document.querySelector('#send').disabled=true;document.querySelector('#result-card').hidden=true;
+  return;
+ }
  if(job?.packet){
   const packet=job.packet;
-  const key=[packet.company_bin,packet.announcement_number,packet.lot_number,job.appOrigin||''].join(':');
+  const key=[packet.company_bin,packet.announcement_number,packet.lot_number,job.appOrigin||'',job.appUserId||''].join(':');
   if(displayedDraftKey!==key){
    displayedDraftKey=key;
    for(const name of ['company_bin','announcement_number','lot_number'])document.querySelector('#'+name).value=packet[name]||'';
@@ -91,9 +97,13 @@ function renderDraft(job){
   }
  }
 }
+let checkingDraft=false;
 async function draftCommand(type){
+ if(type==='draft:get'&&checkingDraft)return;
+ if(type==='draft:get')checkingDraft=true;
  try{const result=await chrome.runtime.sendMessage({type});if(result.error)throw Error(result.error);renderDraft(result.job);}
- catch(error){show(error.message,'error');}
+ catch(error){renderDraft(null);show(error.message,'error');}
+ finally{if(type==='draft:get')checkingDraft=false;}
 }
 document.querySelector('#draft-start').onclick=()=>draftCommand('draft:start');
 document.querySelector('#draft-confirm-absent').onclick=async()=>{
@@ -108,5 +118,6 @@ document.querySelector('#draft-clear').onclick=async()=>{
 };
 if(chrome.runtime?.sendMessage){
  void draftCommand('draft:get');
- chrome.storage.onChanged.addListener((changes,area)=>{if(area==='session'&&changes.draftJob)renderDraft(changes.draftJob.newValue);});
+ chrome.storage.onChanged.addListener((changes,area)=>{if(area==='session'&&changes.draftJob){renderDraft(null);void draftCommand('draft:get');}});
+ setInterval(()=>{if(displayedDraftKey)void draftCommand('draft:get');},3000);
 }

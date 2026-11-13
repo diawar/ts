@@ -1,0 +1,7 @@
+{% extends 'public/base.html' %}
+{% block title %}Подтверждение email — TenderSearch{% endblock %}
+{% block content %}<section class="auth-layout shell"><div class="auth-intro"><p class="eyebrow">ВАШ АККАУНТ</p><h1>Ваша почта.<br><em>Ваш доступ.</em></h1></div><div class="auth-card">
+{% if confirmed %}<h2>Email подтверждён</h2><p>Теперь можно перейти к работе в TenderSearch.</p><a class="btn" href="{% url 'dashboard' %}">Перейти к закупкам</a>
+{% elif valid %}<h2>Подтвердить email</h2><p>Нажмите кнопку, если вы создавали аккаунт TenderSearch с этим адресом. Если вы не регистрировались, закройте страницу.</p><form method="post">{% csrf_token %}<button class="btn" type="submit">Подтвердить email</button></form>
+{% else %}<h2>Ссылка недействительна</h2><p>Ссылка уже использована, заменена новой или срок её действия истёк. Войдите в аккаунт, чтобы проверить подтверждение или запросить новое письмо.</p><a class="btn" href="{% url 'email_notice' %}">Проверить подтверждение</a>{% endif %}
+</div></section>{% endblock %}

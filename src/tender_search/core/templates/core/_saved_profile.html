@@ -1,0 +1,20 @@
+{% load search_tags %}
+<div class="saved-item" data-saved-profile>
+  <div class="saved-profile-name">
+    <div class="saved-profile-title" data-profile-title>
+      <button type="button" class="saved-profile-edit" data-profile-edit aria-label="Переименовать подборку {{ profile.name }}" title="Переименовать подборку">
+        <span class="saved-profile-folder">{% icon 'folder' %}</span><span class="saved-profile-pencil">{% icon 'pencil' %}</span>
+      </button>
+      <a href="{% url 'search' %}?profile={{ profile.pk }}" data-profile-label>{{ profile.name }}</a>
+    </div>
+    <form method="post" action="{% url 'profile_rename' profile_id=profile.pk %}" class="saved-profile-form" data-profile-rename hidden novalidate>
+      {% csrf_token %}
+      <input type="text" name="name" value="{{ profile.name }}" maxlength="200" required aria-label="Название подборки" aria-describedby="profile-name-error-{{ profile.pk }}" autocomplete="off">
+      <button type="submit" class="saved-profile-save" aria-label="Сохранить название" title="Сохранить название">{% icon 'check' %}</button>
+      <button type="button" data-profile-cancel aria-label="Отменить переименование" title="Отменить переименование">{% icon 'x' %}</button>
+      <small id="profile-name-error-{{ profile.pk }}" class="profile-error saved-profile-error" role="alert" data-profile-error hidden></small>
+    </form>
+  </div>
+  {% include 'core/_profile_tracking.html' %}
+  <form method="post" action="{% url 'profile_delete' profile_id=profile.pk %}" class="saved-profile-delete">{% csrf_token %}<button class="link" aria-label="Удалить подборку {{ profile.name }}">{% icon 'x' %}</button></form>
+</div>

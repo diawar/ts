@@ -1,3 +1,4 @@
+from .access import eligible_user_ids
 from datetime import timedelta
 from hashlib import sha256
 from html import escape
@@ -126,7 +127,7 @@ def schedule_profiles():
     from .tasks import monitor_profile
     now = timezone.now()
     owners = TelegramSubscription.objects.filter(enabled=True, chat_id__isnull=False).values('owner_id')
-    candidates = SearchProfile.objects.filter(enabled=True, owner_id__in=owners, owner__is_active=True).filter(Q(next_monitor_at__isnull=True)|Q(next_monitor_at__lte=now)).filter(Q(monitor_lease_until__isnull=True)|Q(monitor_lease_until__lt=now))
+    candidates = SearchProfile.objects.filter(enabled=True, owner_id__in=owners).filter(owner_id__in=eligible_user_ids()).filter(Q(next_monitor_at__isnull=True)|Q(next_monitor_at__lte=now)).filter(Q(monitor_lease_until__isnull=True)|Q(monitor_lease_until__lt=now))
     for profile in candidates[:100]:
         token = secrets.token_hex(16)
         claimed = SearchProfile.objects.filter(pk=profile.pk).filter(Q(monitor_lease_until__isnull=True)|Q(monitor_lease_until__lt=now)).update(monitor_lease=token, monitor_lease_until=now+timedelta(minutes=25))
@@ -138,7 +139,7 @@ def schedule_profiles():
 def scan_profile(profile_id, lease):
     from .forms import SearchForm
     from .search_service import execute_search
-    profile = SearchProfile.objects.filter(pk=profile_id,monitor_lease=lease,enabled=True,owner__is_active=True).first()
+    profile = SearchProfile.objects.filter(pk=profile_id,monitor_lease=lease,enabled=True,owner_id__in=eligible_user_ids()).first()
     if not profile: return
     try:
         if not in_work_hours() or not TelegramSubscription.objects.filter(owner=profile.owner, enabled=True,chat_id__isnull=False).exists(): return
@@ -230,7 +231,7 @@ def deliver_pending():
     now = timezone.now()
     # A process interruption after claiming can mean Telegram accepted a message. Never resend blindly.
     TelegramDelivery.objects.filter(state='sending',updated_at__lt=now-timedelta(minutes=5)).update(state='uncertain',error='Не удалось подтвердить доставку; автоматический повтор отключён.')
-    deliveries=TelegramDelivery.objects.filter(state='pending',profile__enabled=True,owner__is_active=True).filter(Q(retry_at__isnull=True)|Q(retry_at__lte=now)).select_related('lot__announcement','lot__customer','profile')
+    deliveries=TelegramDelivery.objects.filter(state='pending',profile__enabled=True,owner_id__in=eligible_user_ids()).filter(Q(retry_at__isnull=True)|Q(retry_at__lte=now)).select_related('lot__announcement','lot__customer','profile')
     for delivery in deliveries[:20]:
         if not in_work_hours(): return
         from .models import UserLotWorkflow
@@ -265,3 +266,5 @@ def deliver_pending():
             TelegramDelivery.objects.filter(pk=delivery.pk).update(state='uncertain' if exc.code==0 else 'error',error='Доставка не подтверждена.' if exc.code==0 else f'Telegram: {exc.code}')
         except Exception:
             TelegramDelivery.objects.filter(pk=delivery.pk).update(state='error',error='Ошибка формирования сообщения.')
+
+

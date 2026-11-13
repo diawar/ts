@@ -14,7 +14,7 @@ from .models import SearchProfile, CollectionLot, Favorite, AnnouncementWatch, T
 from .collections_service import enqueue_collection
 from .lot_state import visible_collection_lots
 
-STEPS = [('all', 'Неразобранные лоты'), ('interesting', 'Интересные лоты'), ('preparing', 'Подготовка заявки'), ('applied', 'Подали заявку'),
+STEPS = [('all', 'Неразобранные лоты'), ('interesting', 'Интересные лоты'), ('preparing', 'Подготовка заявки'), ('awaiting_results', 'Ожидаем итоги'), ('applied', 'Подали заявку'),
          ('contract', 'Заключение договора'), ('delivery', 'Поставка'), ('payment', 'Оплата'),
          ('won', 'Выиграли'), ('lost', 'Проиграли'), ('not_participated', 'Не участвовали'), ('archived', 'Архив')]
 
@@ -29,9 +29,12 @@ def collections(request, preparation_stage=False):
     if not aggregate and not selected.isdecimal():
         raise Http404
     profile = None if aggregate else get_object_or_404(SearchProfile, pk=selected, owner=request.user)
-    stage = 'preparing' if preparation_stage else request.GET.get('stage', 'all')
-    if stage=='preparing' and not preparation_stage:
-        return redirect(reverse('draft_queue')+'?'+urlencode({'profile':selected or 'all'}))
+    stage = request.GET.get('stage','preparing') if preparation_stage else request.GET.get('stage', 'all')
+    if preparation_stage and stage not in ('preparing','awaiting_results'):stage='preparing'
+    if stage in ('preparing','awaiting_results') and not preparation_stage:
+        params={'profile':selected or 'all'}
+        if stage=='awaiting_results':params['stage']=stage
+        return redirect(reverse('draft_queue')+'?'+urlencode(params))
     if stage not in dict(STEPS):
         stage = 'all'
     selected_sort = request.GET.get('sort', '')
@@ -50,21 +53,19 @@ def collections(request, preparation_stage=False):
         all_records = records
         counters = {key: set() for key, label in STEPS}
         visible_ids = set()
-        for identifier, current_stage, outcome in records.values_list('lot_id', 'stage', 'outcome'):
+        for identifier, current_stage in records.values_list('lot_id', 'stage'):
             if current_stage != 'archived':
                 visible_ids.add(identifier)
             if current_stage == 'new':
                 counters['all'].add(identifier)
-            if current_stage in counters and current_stage not in ('won','lost'):
+            if current_stage in counters:
                 counters[current_stage].add(identifier)
-            if outcome in ('won','lost'):
-                counters[outcome].add(identifier)
         if aggregate:
             request._workspace_lot_count = len(visible_ids)
         context.update(steps=[{'key': key, 'label': label, 'count': len(counters[key])} for key, label in STEPS],
             collection_busy=any(p.collection_lease_until and p.collection_lease_until > timezone.now() for p in ([profile] if profile else profiles)))
-        if stage != 'preparing':
-            records = records.filter(outcome=stage) if stage in ('won','lost') else records.filter(stage='new' if stage == 'all' else stage)
+        if stage not in ('preparing','awaiting_results'):
+            records = records.filter(stage='new' if stage == 'all' else stage)
             if aggregate:
                 representatives = records.order_by().values('lot_id').annotate(identifier=Max('pk')).values('identifier')
                 records = records.filter(pk__in=Subquery(representatives))
@@ -100,10 +101,10 @@ def collections(request, preparation_stage=False):
                 if aggregate:
                     record.terms = list(dict.fromkeys(term for item in record.workflows for term in item.terms))
             context['page'] = page
-    if stage=='preparing':
+    if stage in ('preparing','awaiting_results'):
         from .models import DraftQueueItem
         from .lot_pricing import attach_lot_budgets
-        ids=visible_collection_lots(request.user).filter(stage='preparing')
+        ids=visible_collection_lots(request.user).filter(stage=stage)
         if profile: ids=ids.filter(profile=profile)
         items=list(DraftQueueItem.objects.filter(owner=request.user,lot_id__in=ids.values('lot_id')).select_related('lot__announcement','lot__customer').order_by('created_at','pk'))
         attach_lot_budgets([item.lot for item in items])

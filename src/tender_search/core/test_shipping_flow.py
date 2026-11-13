@@ -21,12 +21,14 @@ class ShippingFlowTests(TestCase):
     def stage(self):
         return UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage
 
-    def pdf(self):
+    def pdf(self, marker=None):
         writer=PdfWriter();writer.add_blank_page(width=100,height=100)
+        if marker:
+            writer.add_metadata({'/Subject': marker})
         output=BytesIO();writer.write(output)
         return SimpleUploadedFile('act.pdf',output.getvalue(),content_type='application/pdf')
 
-    def test_courier_act_payment_archive_and_shared_download(self):
+    def test_courier_act_payment_archive_and_owner_only_download(self):
         url=reverse('shipment_save',args=[self.lot.pk])
         self.client.post(url,{'mode':'courier','courier':'CDEK','tracking_number':'TEST123'})
         shipment=LotShipment.objects.get(owner=self.owner,lot=self.lot)
@@ -37,10 +39,12 @@ class ShippingFlowTests(TestCase):
         self.assertEqual(self.stage(),'payment')
         shipment.refresh_from_db()
         download=reverse('shipment_act_download',args=[self.lot.pk])+f'?act={shipment.pk}'
-        self.client.force_login(self.other)
         response=self.client.get(download)
         self.assertEqual(response.status_code,200)
         self.assertTrue(b''.join(response.streaming_content).startswith(b'%PDF-'))
+        self.client.force_login(self.other)
+        self.assertEqual(self.client.get(download).status_code,404)
+        self.assertNotContains(self.client.get(reverse('lot_detail',args=[self.lot.pk])),f'?act={shipment.pk}')
         self.assertNotEqual(UserLotWorkflow.objects.get(owner=self.other,lot=self.lot).stage,'payment')
         with self.assertRaises(ValueError):advance(self.owner.pk,self.lot.pk,'paid')
         self.assertEqual(self.stage(),'payment')
@@ -61,6 +65,77 @@ class ShippingFlowTests(TestCase):
         self.client.force_login(self.other)
         self.client.post(reverse('shipment_save',args=[self.lot.pk]),{'mode':'own'})
         self.assertFalse(LotShipment.objects.exists())
+
+    def test_act_download_rejects_malformed_identifiers(self):
+        endpoint=reverse('shipment_act_download',args=[self.lot.pk])
+        for identifier in ('','wrong','-1','9'*30):
+            self.assertEqual(self.client.get(endpoint,{'act':identifier}).status_code,404)
+
+    def upload_for(self, owner, marker):
+        self.client.force_login(owner)
+        update_workflow(owner.pk,self.lot.pk,stage='delivery')
+        self.client.post(reverse('shipment_save',args=[self.lot.pk]),{'mode':'own'})
+        upload=self.pdf(marker)
+        content=upload.read();upload.seek(0)
+        response=self.client.post(reverse('shipment_act',args=[self.lot.pk]),{
+            'act':upload, 'owner':self.owner.pk, 'shipment_id':0})
+        self.assertEqual(response.status_code,302)
+        shipment=LotShipment.objects.get(owner=owner,lot=self.lot)
+        self.assertEqual(UserLotWorkflow.objects.get(owner=owner,lot=self.lot).stage,'payment')
+        return shipment,content
+
+    def test_two_owners_same_lot_and_filename_have_independent_acts_and_stages(self):
+        first,first_content=self.upload_for(self.owner,'Owner A')
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.other,lot=self.lot).stage,'interesting')
+        second,second_content=self.upload_for(self.other,'Owner B')
+        self.assertNotEqual(first.act.name,second.act.name)
+        self.assertNotEqual(first_content,second_content)
+        endpoint=reverse('shipment_act_download',args=[self.lot.pk])
+        for owner,own,foreign,expected in ((self.owner,first,second,first_content),
+                                          (self.other,second,first,second_content)):
+            self.client.force_login(owner)
+            response=self.client.get(endpoint,{'act':own.pk})
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(b''.join(response.streaming_content),expected)
+            self.assertIn('private',response['Cache-Control'])
+            self.assertIn('no-store',response['Cache-Control'])
+            self.assertEqual(self.client.get(endpoint,{'act':foreign.pk}).status_code,404)
+            page=self.client.get(reverse('lot_detail',args=[self.lot.pk]))
+            self.assertEqual(list(page.context['shared_acts']),[own])
+            self.assertContains(page,f'?act={own.pk}')
+            self.assertNotContains(page,f'?act={foreign.pk}')
+
+    def test_replacing_own_act_does_not_change_or_delete_another_owners_file(self):
+        first,first_content=self.upload_for(self.owner,'Owner A')
+        second,_=self.upload_for(self.other,'Owner B')
+        old_name=second.act.name
+        update_workflow(self.other.pk,self.lot.pk,stage='delivery')
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(reverse('shipment_act',args=[self.lot.pk]),{'act':self.pdf('Owner B replacement')})
+        first.refresh_from_db();second.refresh_from_db()
+        self.assertNotEqual(second.act.name,old_name)
+        self.assertFalse(second.act.storage.exists(old_name))
+        self.assertTrue(first.act.storage.exists(first.act.name))
+        self.assertTrue(second.act.storage.exists(second.act.name))
+        self.client.force_login(self.owner)
+        response=self.client.get(reverse('shipment_act_download',args=[self.lot.pk]),{'act':first.pk})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(b''.join(response.streaming_content),first_content)
+
+    def test_act_is_not_public_or_readable_by_outsider_or_other_administrator(self):
+        from django.contrib.auth import get_user_model
+        shipment,_=self.upload_for(self.owner,'Private file')
+        endpoint=reverse('shipment_act_download',args=[self.lot.pk])
+        self.client.logout()
+        self.assertEqual(self.client.get(endpoint,{'act':shipment.pk}).status_code,302)
+        outsider=get_user_model().objects.create_user('act-outsider')
+        administrator=get_user_model().objects.create_superuser('act-administrator')
+        for actor in (outsider,administrator):
+            self.client.force_login(actor)
+            self.assertEqual(self.client.get(endpoint,{'act':shipment.pk}).status_code,404)
+            self.assertNotContains(self.client.get(reverse('lot_detail',args=[self.lot.pk])),f'?act={shipment.pk}')
+            for prefix in ('/media/','/','/static/','/data/documents/'):
+                self.assertEqual(self.client.get(prefix+shipment.act.name).status_code,404)
 
     def test_zero_vat_ignores_submitted_rate_and_locked_price_keeps_rate(self):
         update_workflow(self.owner.pk,self.lot.pk,stage='preparing')

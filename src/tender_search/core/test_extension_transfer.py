@@ -69,7 +69,7 @@ class ExtensionTransferTests(TestCase):
         p=ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot)
         confirmed=p.portal_description_saved_at
         self.assertIsNotNone(confirmed)
-        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'awaiting_results')
         self.assertContains(self.client.get(f'/lots/{self.lot.pk}/preparation/'),'Черновик заполнен')
         from .lot_state import apply_personal_state
         from .templatetags.search_tags import application_portal_status

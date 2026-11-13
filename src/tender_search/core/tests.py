@@ -35,11 +35,12 @@ class AccessTests(TestCase):
         Notification.objects.create(owner=cls.other, dedup_key="1", message="Чужое уведомление")
 
     def test_anonymous_dashboard_redirects_to_login(self):
-        self.assertRedirects(self.client.get("/"), "/login/?next=/")
+        self.assertContains(self.client.get("/"), 'Регистрация')
+        self.assertRedirects(self.client.get("/main/"), "/login/?next=/main/")
 
     def test_user_sees_only_own_counts(self):
         self.client.force_login(self.owner)
-        response = self.client.get("/")
+        response = self.client.get("/main/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["profiles"], 0)
         self.assertEqual(response.context["notifications"], 0)
@@ -56,7 +57,7 @@ class AccessTests(TestCase):
     def test_login_works_and_external_redirect_is_ignored(self):
         response = self.client.post("/login/", {"username": "owner", "password": "test-strong-password",
                                                  "next": "https://evil.example/"})
-        self.assertRedirects(response, "/")
+        self.assertRedirects(response, "/main/")
 
     def test_csrf_is_required_and_get_cannot_log_out(self):
         secure_client = Client(enforce_csrf_checks=True)

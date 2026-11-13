@@ -49,6 +49,39 @@ class SharedDocumentPolicyTests(TestCase):
         DocumentVersion.objects.create(document=doc,sha256='b'*64,text='Клавиатура')
         self.assertFalse(matching_lots(matcher))
 
+    def test_returning_to_known_content_updates_search_and_cache_version(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from .models import Document, DocumentVersion
+        from .technical_documents import cache_file, matching_lots
+        from tender_search.matching import PreparedMatcher
+        self.lot.announcement.deadline = timezone.now() + timedelta(days=1)
+        self.lot.announcement.save()
+        api = Mock()
+        file = SimpleNamespace(id='tech-reverted', lot_id=self.lot.source_id,
+            name='spec.txt', url='https://example.test/a')
+        with patch('tender_search.core.specification_service.extract_text') as extract:
+            versions = []
+            for url, digest, text in [('a', 'a'*64, 'Клавиатура'),
+                                      ('b', 'b'*64, 'Мышь'),
+                                      ('c', 'a'*64, 'Клавиатура')]:
+                file.url = 'https://example.test/' + url
+                api.download.return_value = {'sha256': digest, 'path': '/unused/spec.txt'}
+                extract.return_value = (text, False)
+                versions.append(cache_file(self.lot, file, api))
+        doc = Document.objects.get(source_id=file.id)
+        self.assertEqual(versions[0].pk, versions[2].pk)
+        self.assertEqual(doc.current_version_id, versions[0].pk)
+        self.assertEqual(DocumentVersion.objects.filter(document=doc).count(), 2)
+        self.assertTrue(matching_lots(PreparedMatcher({'terms': ['клавиатур']})))
+        self.assertFalse(matching_lots(PreparedMatcher({'terms': ['мыш']})))
+        # Re-reading the unchanged URL must retain A even though B has a higher ID.
+        api.reset_mock()
+        with patch('tender_search.core.technical_documents.stored_path') as path:
+            path.return_value.is_file.return_value = True
+            self.assertEqual(cache_file(self.lot, file, api).pk, versions[0].pk)
+        api.download.assert_not_called()
+
 
     def test_first_population_cannot_complete_with_error(self):
         from django.core.cache import cache

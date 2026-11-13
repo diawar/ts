@@ -5,9 +5,9 @@ from django.db import transaction
 from .models import CollectionLot, Favorite, AnnouncementWatch, SearchProfile, Lot, UserLotWorkflow
 from django.utils import timezone
 
-FAVORITE_STAGES = ('interesting', 'preparing', 'applied', 'contract', 'delivery', 'payment', 'won', 'lost')
-WATCH_STAGES = ('interesting', 'preparing', 'applied', 'contract')
-LOCKED_STAGES = ('applied', 'contract', 'delivery', 'payment', 'won', 'lost', 'archived')
+FAVORITE_STAGES = ('interesting', 'preparing', 'awaiting_results', 'applied', 'contract', 'delivery', 'payment', 'won', 'lost')
+WATCH_STAGES = ('interesting', 'preparing', 'awaiting_results', 'applied', 'contract')
+LOCKED_STAGES = ('awaiting_results', 'applied', 'contract', 'delivery', 'payment', 'won', 'lost', 'archived')
 syncing = ContextVar('workflow_state_syncing', default=False)
 WORK_FIELDS = ('stage', 'outcome', 'expired_from_stage', 'result_tracking')
 
@@ -20,7 +20,10 @@ def publish_workflow(item, created=False, update_fields=None):
             defaults={field: getattr(item, field) for field in WORK_FIELDS})
         if not created and not fresh:
             fields = set(WORK_FIELDS) if update_fields is None else set(WORK_FIELDS) & set(update_fields)
-            for field in fields:
+            if 'stage' in fields and state.stage!=item.stage:
+                state.stage_entered_at=timezone.now()
+                fields.add('stage_entered_at')
+            for field in fields - {'stage_entered_at'}:
                 setattr(state, field, getattr(item, field))
             if fields:
                 state.save(update_fields=[*fields, 'updated_at'])
@@ -33,6 +36,8 @@ def publish_workflow(item, created=False, update_fields=None):
 def update_workflow(owner_id, lot_id, **values):
     with transaction.atomic():
         state, _ = UserLotWorkflow.objects.select_for_update().get_or_create(owner_id=owner_id, lot_id=lot_id)
+        if 'stage' in values and values['stage']!=state.stage:
+            values['stage_entered_at']=timezone.now()
         for field, value in values.items():
             setattr(state, field, value)
         state.save(update_fields=[*values, 'updated_at'])

@@ -52,7 +52,7 @@ class DraftQueueTests(TestCase):
         self.item.refresh_from_db();self.assertEqual(self.item.state,'complete')
         p=ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot)
         self.assertEqual(p.portal_number,'123');self.assertIsNotNone(p.portal_description_saved_at)
-        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'awaiting_results')
         self.assertEqual(self.post_progress(status='running').status_code,400)
 
     def test_progress_cannot_confirm_wrong_lot_or_partial_description(self):
@@ -149,7 +149,7 @@ class DraftQueueTests(TestCase):
         self.assertEqual(self.post_progress().status_code,200)
         self.assertNotIn('reset_absent_application',self.client.post(self.base+'packet/').json().get('packet',{}))
 
-    def test_expired_queue_is_removed_without_moving_workflow_or_deleting_preparation(self):
+    def test_expired_queue_leaves_preparation_stage_and_preserves_saved_data(self):
         from datetime import timedelta
         self.lot.announcement.deadline=timezone.now()-timedelta(seconds=1)
         self.lot.announcement.save()
@@ -159,6 +159,44 @@ class DraftQueueTests(TestCase):
         self.item.refresh_from_db();self.assertEqual(self.item.state,'cancelled')
         self.assertNotEqual(self.item.generation,old_generation)
         self.assertTrue(ApplicationPreparation.objects.filter(owner=self.owner,lot=self.lot).exists())
-        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
+        workflow=UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot)
+        self.assertEqual(workflow.stage,'interesting')
+        self.assertTrue(workflow.result_tracking)
+        page=self.client.get('/workspace/drafts/')
+        self.assertNotIn(self.item.pk,[item.pk for item in page.context['items']])
+        self.assertEqual(next(step['count'] for step in page.context['steps'] if step['key']=='preparing'),0)
         self.client.post('/workspace/drafts/add/',{'lots':[str(self.lot.pk)]})
         self.item.refresh_from_db();self.assertEqual(self.item.state,'cancelled')
+
+    def test_expiry_repairs_already_cancelled_or_completed_queue_without_claiming_nonparticipation(self):
+        from datetime import timedelta
+        from .draft_queue import expire_draft_queue
+        from .workflow_state import update_workflow
+        from .models import CollectionLot, LotOutcomeWatch
+        self.lot.announcement.deadline=timezone.now()-timedelta(seconds=1)
+        self.lot.announcement.save()
+        before=ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot).data
+        for state in ('cancelled','complete'):
+            with self.subTest(state=state):
+                DraftQueueItem.objects.filter(pk=self.item.pk).update(state=state)
+                update_workflow(self.owner.pk,self.lot.pk,stage='preparing',result_tracking=True)
+                expire_draft_queue(self.owner)
+                self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'interesting')
+                self.assertFalse(CollectionLot.objects.filter(profile__owner=self.owner,lot=self.lot).exclude(stage='interesting').exists())
+                self.assertTrue(LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot).enabled)
+                self.assertEqual(ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot).data,before)
+                self.item.refresh_from_db()
+                self.assertEqual(self.item.state,state)
+
+    def test_expiry_preserves_open_preparations_and_later_workflow_stages(self):
+        from datetime import timedelta
+        from .draft_queue import expire_draft_queue
+        from .workflow_state import update_workflow
+        expire_draft_queue(self.owner)
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
+        self.lot.announcement.deadline=timezone.now()-timedelta(seconds=1)
+        self.lot.announcement.save()
+        for stage in ('applied','contract','delivery','payment','archived'):
+            update_workflow(self.owner.pk,self.lot.pk,stage=stage)
+            expire_draft_queue(self.owner)
+            self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,stage)

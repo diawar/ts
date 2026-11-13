@@ -14,6 +14,13 @@ def split_terms(value, phrase=False):
     return terms
 
 
+class ProfileNameForm(forms.Form):
+    name = forms.CharField(max_length=200, error_messages={
+        'required': 'Введите название подборки.',
+        'max_length': 'Название должно быть не длиннее 200 символов.',
+    })
+
+
 class SearchForm(forms.Form):
     terms = forms.CharField(label="Ключевые слова", required=False,
                             widget=forms.Textarea(attrs={"rows": 2, "placeholder": "телефон\nсмартфон"}),
@@ -129,6 +136,13 @@ class SearchForm(forms.Form):
 
 
 class CompanySettingsForm(forms.Form):
+    def clean_company_bin(self):
+        from .models import CompanySettings
+        value = self.cleaned_data['company_bin']
+        if value and CompanySettings.objects.filter(company_bin=value).exclude(owner=self.owner).exists():
+            raise forms.ValidationError('Этот БИН уже используется другим аккаунтом.')
+        return value
+
     is_vat_payer = forms.TypedChoiceField(label='Работаем с НДС', choices=[('True','Да, плательщик НДС'),('False','Нет, без НДС')], coerce=lambda value: value == 'True', initial=True)
     company_bin = forms.RegexField(label='БИН компании', regex=r'^[0-9]{12}$', required=False,
         max_length=12, min_length=12, widget=forms.TextInput(attrs={'inputmode':'numeric','autocomplete':'off','placeholder':'12 цифр'}),
@@ -161,6 +175,7 @@ class CompanySettingsForm(forms.Form):
         error_messages={'invalid':'Укажите телефон: цифры, пробелы, скобки, дефис и необязательный + в начале.'})
 
     def __init__(self,*args,**kwargs):
+        self.owner = kwargs.pop('owner', None)
         bound=args[0] if args else kwargs.get('data')
         self._structured_address_posted = bound is not None and any('address_'+key in bound for key in ('city','street','house','office'))
         if bound is not None:

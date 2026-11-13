@@ -1,7 +1,17 @@
 {% extends 'core/base.html' %}
-{% block title %}Редактирование пользователя — Госзакупки{% endblock %}
+{% block title %}Редактирование пользователя — TenderSearch{% endblock %}
 {% block content %}
 <h1>Редактирование пользователя</h1>
+{% if access_form %}
+<section class="panel user-create">
+  <h2>Срок доступа</h2>
+  <p>Доступ до {{ account_access.expires_at|date:'d.m.Y H:i' }}. Изменение срока не меняет пароль и данные пользователя.</p>
+  <form method="post" action="{% url 'administration_user_access' account.pk %}">
+    {% csrf_token %}{{ access_form.as_p }}
+    <button class="primary" type="submit">Сохранить срок доступа</button>
+  </form>
+</section>
+{% else %}<p class="muted">Доступ администратора не ограничен по сроку.</p>{% endif %}
 <section class="panel user-create">
   <form method="post">
     {% csrf_token %}

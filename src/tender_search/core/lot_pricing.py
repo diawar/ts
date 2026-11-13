@@ -15,6 +15,8 @@ def cached_pricing_detail(lot):
         return lot._cached_pricing_detail
     detail = (lot.raw or {}).get('_pricing_detail')
     if not isinstance(detail, dict) or detail.get('id') != lot.source_id:
+        if lot.announcement.source != 'zakup':
+            return None
         cached = AnnouncementLotCache.objects.filter(pk=lot.announcement.source_id).only('rows').first()
         detail = next((item for item in (cached.rows if cached else [])
                        if isinstance(item, dict) and item.get('id') == lot.source_id), None)
@@ -265,8 +267,9 @@ def lot_budget_display(lot, detail=None):
 
 def attach_lot_budgets(lots):
     """Read cached card details for the entire displayed page in one query."""
-    missing = [lot for lot in lots if not isinstance((lot.raw or {}).get('_pricing_detail'), dict)
-        or (lot.raw or {}).get('_pricing_detail', {}).get('id') != lot.source_id]
+    missing = [lot for lot in lots if lot.announcement.source == 'zakup' and (
+        not isinstance((lot.raw or {}).get('_pricing_detail'), dict)
+        or (lot.raw or {}).get('_pricing_detail', {}).get('id') != lot.source_id)]
     cards = {}
     if missing:
         from django.db import connection
@@ -290,7 +293,7 @@ def attach_lot_budgets(lots):
                 if isinstance(detail, dict) and detail.get('id') in wanted:
                     cards[(announcement_id, detail['id'])] = detail
     for lot in lots:
-        detail = cards.get((lot.announcement.source_id, lot.source_id))
+        detail = cards.get((lot.announcement.source_id, lot.source_id)) if lot.announcement.source == 'zakup' else None
         raw_detail = (lot.raw or {}).get('_pricing_detail')
         lot._cached_pricing_detail = detail or (raw_detail if isinstance(raw_detail, dict) and raw_detail.get('id') == lot.source_id else None)
         lot._budget_display = lot_budget_display(lot, detail)

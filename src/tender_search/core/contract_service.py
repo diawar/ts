@@ -1,5 +1,6 @@
 """Leased, read-only contract monitoring with fenced personal workflow updates."""
 import secrets
+from .access import eligible_user_ids
 from datetime import timedelta
 from django.db import transaction
 from django.db.models import Q
@@ -10,8 +11,8 @@ from .contract_source import contract_evidence, ContractReview
 from .outcome_service import company_bin_for, supported_source
 from .workflow_state import update_workflow
 
-STAGES = ('won', 'contract', 'delivery', 'payment')
-ORDER = {'won': 0, 'contract': 1, 'delivery': 2, 'payment': 3}
+STAGES = ('contract', 'delivery', 'payment')
+ORDER = {'contract': 1, 'delivery': 2, 'payment': 3}
 
 
 def invalidate(owner_id, lot_id=None):
@@ -25,7 +26,7 @@ def invalidate(owner_id, lot_id=None):
 def schedule_contracts():
     from .tasks import check_lot_contract
     now = timezone.now()
-    states = UserLotWorkflow.objects.filter(owner__is_active=True, outcome='won', stage__in=STAGES)
+    states = UserLotWorkflow.objects.filter(owner_id__in=eligible_user_ids(), outcome='won', stage__in=STAGES)
     for state in states.filter(contractwatch__isnull=True)[:100]:
         ContractWatch.objects.get_or_create(workflow=state, defaults={'company_bin': company_bin_for(state.owner_id)})
     due = ContractWatch.objects.filter(workflow__in=states).filter(
@@ -50,7 +51,7 @@ def confirmed_outcome(state, company_bin, now):
 
 
 def check_contract(watch_id, lease):
-    watch = ContractWatch.objects.filter(pk=watch_id, lease=lease, workflow__owner__is_active=True).select_related(
+    watch = ContractWatch.objects.filter(pk=watch_id, lease=lease, workflow__owner_id__in=eligible_user_ids()).select_related(
         'workflow__lot__announcement').first()
     if not watch:
         return
@@ -95,7 +96,8 @@ def check_contract(watch_id, lease):
             active.save()
             target = result['state']
             from .models import LotShipment
-            if target in ('payment', 'paid') and not LotShipment.objects.filter(owner_id=current.owner_id, lot_id=current.lot_id).exclude(act='').exists():
+            if target in ('payment', 'paid') and not LotShipment.objects.filter(owner_id=current.owner_id, lot_id=current.lot_id,
+                    shipped_at__isnull=False,act_uploaded_at__isnull=False).exclude(act='').exists():
                 target = 'delivery'
             if target == 'paid':
                 from .fulfillment import complete_payment
@@ -111,3 +113,4 @@ def check_contract(watch_id, lease):
                         result.get('contract_id') or result.get('number'),result.get('number'))
     finally:
         ContractWatch.objects.filter(pk=watch_id,lease=lease).update(lease='',lease_until=None)
+

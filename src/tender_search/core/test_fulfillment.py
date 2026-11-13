@@ -17,7 +17,7 @@ class FulfillmentTests(TestCase):
         update_workflow(self.owner.pk,self.lot.pk,stage='preparing')
         self.client.post(self.endpoint,{'confirm_discount':'on','unit_gross':'116'})
         UserLotPrice.objects.filter(owner=self.owner,lot=self.lot).update(locked_at=timezone.now())
-        update_workflow(self.owner.pk,self.lot.pk,stage='won',outcome='won',result_tracking=True)
+        update_workflow(self.owner.pk,self.lot.pk,stage='won',outcome='won',result_tracking=False,completed_at=timezone.now())
         from .outcome_service import register_watch
         register_watch(self.owner.pk,self.lot.pk)
         self.action_url=f'/workspace/lots/{self.lot.pk}/action/'
@@ -25,19 +25,20 @@ class FulfillmentTests(TestCase):
     def state(self):
         return UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot)
 
-    def test_confirmed_payment_archives_preserving_price_note_and_stopping_checks(self):
+    def test_confirmed_payment_completes_preserving_price_note_and_stopping_checks(self):
         from .models import LotShipment,ContractWatch
         from .fulfillment import complete_payment
         UserLotNote.objects.create(owner=self.owner,lot=self.lot,text='Saved note')
         state=update_workflow(self.owner.pk,self.lot.pk,stage='payment',outcome='won',result_tracking=True)
-        LotShipment.objects.create(owner=self.owner,lot=self.lot,act='test-act.pdf')
+        LotShipment.objects.create(owner=self.owner,lot=self.lot,act='test-act.pdf',
+            shipped_at=timezone.now(),act_uploaded_at=timezone.now())
         with self.assertRaises(ValueError):complete_payment(self.owner.pk,self.lot.pk)
         ContractWatch.objects.create(workflow=state,state='paid',evidence={'state':'paid'},checked_at=timezone.now())
         complete_payment(self.owner.pk,self.lot.pk)
-        self.assertEqual(self.state().stage,'archived')
+        self.assertEqual(self.state().stage,'won')
         self.assertTrue(self.state().completed_at)
         self.assertTrue(UserLotPrice.objects.get(owner=self.owner,lot=self.lot).locked_at)
-        self.assertFalse(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
+        self.assertTrue(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
         self.assertFalse(AnnouncementWatch.objects.get(owner=self.owner,announcement=self.lot.announcement).enabled)
         self.assertFalse(LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot).enabled)
         self.assertEqual(UserLotNote.objects.get(owner=self.owner,lot=self.lot).text,'Saved note')
@@ -89,7 +90,8 @@ class FulfillmentTests(TestCase):
         advance(self.owner.pk,self.lot.pk,'restore')
         self.assertEqual(set(CollectionLot.objects.filter(profile__owner=self.owner,lot=self.lot).values_list('stage',flat=True)),{'won'})
         self.assertTrue(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
-        self.assertTrue(LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot).enabled)
+        self.assertFalse(LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot).enabled)
+        self.assertTrue(self.state().completed_at)
 
     def test_archive_ui_and_count_and_owner_isolation(self):
         advance(self.owner.pk,self.lot.pk,'archive')

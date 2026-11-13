@@ -80,7 +80,7 @@ def draft_position_count(lot):
 def prepare_application(request, lot_id, price_form=None):
     lot=get_object_or_404(Lot.objects.select_related('announcement'),pk=lot_id)
     workflow=get_object_or_404(UserLotWorkflow,owner=request.user,lot=lot)
-    if workflow.stage not in ('interesting','preparing','applied','won','lost','contract','delivery','payment','archived'):
+    if workflow.stage not in ('interesting','preparing','awaiting_results','applied','won','lost','contract','delivery','payment','archived'):
         raise PermissionDenied
     saved=ApplicationPreparation.objects.filter(owner=request.user,lot=lot).first()
     from .models import DraftQueueItem
@@ -139,7 +139,7 @@ def prepare_application(request, lot_id, price_form=None):
         price_context['price_editable']=False
         for field in price_context['price_form'].fields.values():field.disabled=True
     response=render(request,'core/application_preparation.html',{'lot':lot,'form':form,'preparation':saved,**price_context,
-        'export_supported':export_supported,
+        'export_supported':export_supported,'workflow_stage':workflow.stage,
         'draft_registry_positions':draft_position_count(lot) if export_supported and editable else None,
         'company_bin':company_bin,'preparation_busy':preparation_busy,'editable':editable,'bin_changed':bool(saved and saved.company_bin!=company_bin)})
     response['Cache-Control']='no-store, private'
@@ -235,7 +235,14 @@ def save_portal_report(owner, lot_id, report, *, allow_create=False):
             saved.portal_sync_error=''
             if report.get('description_saved'):
                 saved.portal_description_saved_at=observed
-            if state=='submitted' and workflow and workflow.stage in ('new','interesting','preparing','not_participated','applied'):
+            if state=='draft' and report.get('description_saved') and workflow and workflow.stage in ('interesting','preparing'):
+                from .workflow_state import update_workflow
+                from .models import DraftQueueItem
+                update_workflow(owner.pk,lot_id,stage='awaiting_results',result_tracking=False,expired_from_stage='',keep_after_deadline=False)
+                from .fulfillment import pause_outcome
+                pause_outcome(owner.pk,lot_id)
+                DraftQueueItem.objects.filter(owner=owner,lot_id=lot_id).exclude(state='cancelled').update(state='complete',updated_at=timezone.now())
+            if state=='submitted' and workflow and workflow.stage in ('new','interesting','preparing','awaiting_results','not_participated','applied'):
                 from .workflow_state import update_workflow
                 from .outcome_service import register_watch
                 from .models import UserLotPrice

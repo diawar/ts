@@ -136,7 +136,7 @@ class CollectionsTests(TestCase):
         response=self.client.get('/workspace/',{'profile':self.profile.pk,'stage':'interesting'})
         soup=BeautifulSoup(response.content,'html.parser')
         self.assertEqual(len(soup.select('.collection-tab')),3)
-        self.assertEqual(len(soup.select('.funnel-step')),11)
+        self.assertEqual(len(soup.select('.funnel-step')),12)
         self.assertTrue(soup.select_one('.favorite-icon.selected'))
         self.assertTrue(soup.select_one('.status-watch-icon.selected'))
         self.assertNotContains(response,'Чужая')
