@@ -14,6 +14,9 @@ def numbered_pagination(context, page, anchor='', public=False):
     request = context['request']
     def link(number):
         query = QueryDict(mutable=True) if public else request.GET.copy()
+        # Deadline limits now belong to the saved search specification. Match
+        # page-size/sort controls and discard this obsolete URL parameter.
+        query.pop('remaining', None)
         if public and number == 1:
             query.pop('page', None)
         else:

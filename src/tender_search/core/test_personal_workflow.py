@@ -37,7 +37,7 @@ class PersonalWorkflowTests(TestCase):
         data=dict(self.lot.raw,id=self.lot.source_id+1,lot_number='second-lot')
         second=store_lot(data)
         self.assertEqual(second.announcement_id,self.lot.announcement_id)
-        CollectionLot.objects.create(profile=self.item.profile,lot=second,stage='interesting')
+        CollectionLot.objects.create(profile=self.item.profile,lot=second,stage='preparing')
         watch=AnnouncementWatch.objects.get(owner=self.owner,announcement=self.lot.announcement)
         watch.lease='old-check';watch.save()
         generation=watch.generation
@@ -54,9 +54,10 @@ class PersonalWorkflowTests(TestCase):
     def test_manual_return_after_deadline_survives_monitor_and_can_be_declined(self):
         self.lot.announcement.deadline=timezone.now()-timedelta(days=1);self.lot.announcement.save()
         move_closed_unsubmitted()
-        self.client.post(f'/workspace/items/{self.item.pk}/stage/',{'stage':'interesting'})
+        update_workflow(self.owner.pk,self.lot.pk,stage='not_participated',result_tracking=False)
+        self.client.post(f'/workspace/items/{self.item.pk}/stage/',{'stage':'preparing'})
         move_closed_unsubmitted();move_closed_unsubmitted()
-        self.item.refresh_from_db();self.assertEqual(self.item.stage,'interesting')
+        self.item.refresh_from_db();self.assertEqual(self.item.stage,'preparing')
         self.assertTrue(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
         self.client.post(f'/workspace/items/{self.item.pk}/stage/',{'stage':'not_participated'})
         self.lot.announcement.deadline=timezone.now()+timedelta(days=1);self.lot.announcement.save()
@@ -66,10 +67,10 @@ class PersonalWorkflowTests(TestCase):
     def test_new_membership_inherits_and_action_changes_all_own_memberships(self):
         second=SearchProfile.objects.create(owner=self.owner,name='Second')
         member=CollectionLot.objects.create(profile=second,lot=self.lot)
-        self.assertEqual(member.stage,'interesting')
+        self.assertEqual(member.stage,'preparing')
         self.client.post(f'/workspace/items/{member.pk}/stage/',{'stage':'not_participated','return_scope':'all'})
         self.assertEqual(set(CollectionLot.objects.filter(profile__owner=self.owner,lot=self.lot).values_list('stage',flat=True)),{'not_participated'})
-        self.assertEqual(CollectionLot.objects.get(profile__owner=self.other,lot=self.lot).stage,'interesting')
+        self.assertEqual(CollectionLot.objects.get(profile__owner=self.other,lot=self.lot).stage,'preparing')
         self.assertFalse(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
         self.assertFalse(AnnouncementWatch.objects.get(owner=self.owner,announcement=self.lot.announcement).enabled)
 
@@ -82,9 +83,9 @@ class PersonalWorkflowTests(TestCase):
     def test_aggregate_has_only_one_pair_of_actions(self):
         second=SearchProfile.objects.create(owner=self.owner,name='Second')
         CollectionLot.objects.create(profile=second,lot=self.lot)
-        response=self.client.get('/workspace/',{'stage':'interesting'})
-        self.assertEqual(response.context['page'].paginator.count,1)
-        self.assertContains(response,'>Не интересно</button>',count=1)
+        response=self.client.get('/workspace/',{'stage':'preparing'},follow=True)
+        self.assertEqual(len(response.context['items']),1)
+        self.assertContains(response,'>Не участвовать</button>',count=1)
 
     def test_future_favorite_still_expires_normally(self):
         self.lot.announcement.deadline=timezone.now()+timedelta(days=1);self.lot.announcement.save()
@@ -92,4 +93,4 @@ class PersonalWorkflowTests(TestCase):
         self.assertFalse(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).keep_after_deadline)
         self.lot.announcement.deadline=timezone.now()-timedelta(seconds=1);self.lot.announcement.save()
         move_closed_unsubmitted()
-        self.item.refresh_from_db();self.assertEqual(self.item.stage,'interesting');self.assertTrue(self.item.result_tracking)
+        self.item.refresh_from_db();self.assertEqual(self.item.stage,'awaiting_results');self.assertTrue(self.item.result_tracking)

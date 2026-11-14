@@ -22,7 +22,7 @@ class LotPricingTests(TestCase):
         self.endpoint=f'/lots/{self.lot.pk}/price/'
         for owner in (self.owner,self.other):
             profile=SearchProfile.objects.create(owner=owner,name='Мои')
-            CollectionLot.objects.create(profile=profile,lot=self.lot,stage='interesting')
+            CollectionLot.objects.create(profile=profile,lot=self.lot,stage='preparing')
 
     def test_gate_rejects_unknown_external_combined_and_conflicting_data(self):
         from .workflow_state import update_workflow

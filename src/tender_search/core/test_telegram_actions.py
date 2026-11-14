@@ -30,14 +30,14 @@ class TelegramActionTests(TestCase):
         query=self.query()
         with patch('tender_search.core.telegram_service.telegram_api',return_value=True) as api:
             handle_update({'callback_query':query});handle_update({'callback_query':query})
-        self.assertEqual(self.stage(),'interesting')
+        self.assertEqual(self.stage(),'preparing')
         self.assertEqual(Favorite.objects.filter(owner=self.owner,lot=self.lot).count(),1)
         self.assertFalse(Favorite.objects.filter(owner=self.other).exists())
         self.assertTrue(AnnouncementWatch.objects.get(owner=self.owner,announcement=self.lot.announcement).enabled)
         self.assertEqual(CollectionLot.objects.filter(profile__owner=self.owner,lot=self.lot).count(),1)
         self.assertEqual(api.call_count,2)
         self.assertTrue(all(call.args[0]=='answerCallbackQuery' for call in api.call_args_list))
-        self.assertIn('уже в интересных',api.call_args.args[1]['text'])
+        self.assertIn('уже на этапе «В работе»',api.call_args.args[1]['text'])
 
     def test_sender_adds_opaque_action_to_actual_new_message(self):
         TelegramDelivery.objects.filter(pk=self.delivery.pk).update(state='pending',interest_token=None,message_id=None)
@@ -45,12 +45,12 @@ class TelegramActionTests(TestCase):
         with patch('tender_search.core.telegram_service.in_work_hours',return_value=True),patch('tender_search.core.telegram_service.telegram_api',return_value={'message_id':100}) as api:
             deliver_pending()
         buttons=api.call_args.args[1]['reply_markup']['inline_keyboard']
-        self.assertEqual(buttons[0][0]['text'],'⭐ В интересные')
+        self.assertEqual(buttons[0][0]['text'],'⭐ В работу')
         self.assertLessEqual(len(buttons[0][0]['callback_data'].encode()),64)
         self.delivery.refresh_from_db()
         self.assertEqual(buttons[0][0]['callback_data'],callback_data(self.delivery))
         self.assertTrue(buttons[1][0]['url'])
-        apply_interest(self.query());self.assertEqual(self.stage(),'interesting')
+        apply_interest(self.query());self.assertEqual(self.stage(),'preparing')
 
     def test_forged_forwarded_and_unconfirmed_messages_cannot_move_lot(self):
         TelegramSubscription.objects.create(owner=self.other,chat_id=999,enabled=True)
@@ -90,20 +90,20 @@ class TelegramActionTests(TestCase):
         self.lot.raw=dict(raw,status={'id':16});self.lot.save()
         apply_interest(self.query());self.assertEqual(self.stage(),'not_participated')
         self.lot.raw=raw;self.lot.save()
-        apply_interest(self.query());self.assertEqual(self.stage(),'interesting')
+        apply_interest(self.query());self.assertEqual(self.stage(),'preparing')
 
     def test_action_can_add_lot_when_not_yet_in_collection(self):
         CollectionLot.objects.filter(profile__owner=self.owner,lot=self.lot).delete()
         UserLotWorkflow.objects.filter(owner=self.owner,lot=self.lot).delete()
         apply_interest(self.query())
-        self.assertEqual(self.stage(),'interesting')
-        self.assertTrue(CollectionLot.objects.filter(profile__owner=self.owner,lot=self.lot,stage='interesting').exists())
+        self.assertEqual(self.stage(),'preparing')
+        self.assertTrue(CollectionLot.objects.filter(profile__owner=self.owner,lot=self.lot,stage='preparing').exists())
 
     def test_expired_callback_confirmation_does_not_block_update_cursor(self):
         query=self.query()
         with patch('tender_search.core.telegram_service.telegram_api',side_effect=TelegramError(400)):
             handle_update({'callback_query':query})
-        self.assertEqual(self.stage(),'interesting')
+        self.assertEqual(self.stage(),'preparing')
         with patch('tender_search.core.telegram_service.telegram_api') as api:
             api.side_effect=[[{'update_id':12,'callback_query':query}],True]
             poll_updates()

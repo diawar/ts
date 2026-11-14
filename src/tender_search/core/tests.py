@@ -271,7 +271,10 @@ class PersonalSearchSettingsTests(TestCase):
         url = f"/search/{job.pk}/"
         self.assertContains(self.client.get(url+"?view=cards"), 'class="lot-card"')
         self.assertContains(self.client.get(url), 'class="lot-card"')
-        self.assertContains(self.client.get(url+"?view=table"), '<table>')
+        from bs4 import BeautifulSoup
+        table_response = self.client.get(url+"?view=table")
+        self.assertEqual(table_response.status_code, 200)
+        self.assertIsNotNone(BeautifulSoup(table_response.content, 'html.parser').select_one('table'))
         self.assertContains(self.client.get(url), "В избранное")
         self.client.force_login(self.other)
         self.assertNotIn("result_view", self.client.session)

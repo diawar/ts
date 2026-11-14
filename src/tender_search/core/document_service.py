@@ -73,13 +73,16 @@ def download_documents(lot_id, api):
         cleanup_documents(lot.announcement_id)
 
 
-def documents_needed(lot_ids, deadline, kind, now=None):
-    """A file is shared: every user's workflow participates in retention."""
+def documents_needed(lot_ids, deadline, kind, now=None, *, owner_id=None):
+    """Shared files consider all workflows; personal files only their owner's."""
     from .models import UserLotWorkflow
     now = now or timezone.now()
     if deadline is None or deadline > now - timedelta(days=7):
         return True
-    for workflow in UserLotWorkflow.objects.filter(lot_id__in=lot_ids):
+    workflows=UserLotWorkflow.objects.filter(lot_id__in=lot_ids)
+    if owner_id is not None:
+        workflows=workflows.filter(owner_id=owner_id)
+    for workflow in workflows:
         if workflow.stage not in ('lost', 'not_participated', 'archived'):
             return True
         days = 90 if kind in ('contract', 'act') or workflow.stage == 'archived' else 30
@@ -87,6 +90,16 @@ def documents_needed(lot_ids, deadline, kind, now=None):
         if changed > now - timedelta(days=days):
             return True
     return False
+
+
+def private_act_needed(shipment, now=None):
+    now=now or timezone.now()
+    uploaded=shipment.act_uploaded_at or shipment.shipped_at or shipment.created_at
+    # A recently uploaded personal file gets its own retention period even if
+    # its owner's workflow has already been archived or removed.
+    return uploaded>now-timedelta(days=90) or documents_needed(
+        [shipment.lot_id],shipment.lot.announcement.deadline,'act',now,
+        owner_id=shipment.owner_id)
 
 
 def cleanup_documents(announcement_id):
@@ -125,7 +138,7 @@ def cleanup_expired_documents():
     for announcement_id in ids.iterator():
         cleanup_documents(announcement_id)
     for shipment in LotShipment.objects.exclude(act='').select_related('lot__announcement').iterator():
-        if not documents_needed([shipment.lot_id], shipment.lot.announcement.deadline, 'act'):
+        if not private_act_needed(shipment):
             name, storage = shipment.act.name, shipment.act.storage
             LotShipment.objects.filter(pk=shipment.pk, act=name).update(act='')
             if not LotShipment.objects.filter(act=name).exists():

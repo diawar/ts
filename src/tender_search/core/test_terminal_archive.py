@@ -42,7 +42,7 @@ class TerminalArchiveTests(TestCase):
                 self.assertEqual(self.state.archived_from_stage, stage)
                 self.assertEqual(self.state.archived_at, self.now)
                 self.assertEqual(set(CollectionLot.objects.filter(profile__owner=self.owner).values_list('stage', flat=True)), {'archived'})
-                self.assertEqual(UserLotWorkflow.objects.get(owner=self.other, lot=self.lot).stage, 'interesting')
+                self.assertEqual(UserLotWorkflow.objects.get(owner=self.other, lot=self.lot).stage, 'preparing')
 
     def test_not_before_30_days_and_never_other_stages(self):
         for stage in ('won', 'lost', 'not_participated'):
@@ -51,7 +51,7 @@ class TerminalArchiveTests(TestCase):
                 archive_due()
             self.state.refresh_from_db()
             self.assertEqual(self.state.stage, stage)
-        for stage in ('new', 'interesting', 'preparing', 'awaiting_results', 'applied', 'contract', 'delivery', 'payment'):
+        for stage in ('new', 'preparing', 'preparing', 'awaiting_results', 'applied', 'contract', 'delivery', 'payment'):
             self.enter(stage, timedelta(days=90))
             archive_due()
             self.state.refresh_from_db()

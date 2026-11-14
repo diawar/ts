@@ -12,7 +12,7 @@ class RestrictionReportTests(TestCase):
         CompanySettings.objects.create(owner=self.owner, company_bin='241040001415')
         ann = Announcement.objects.create(source_id=41022921, external_id=17921264, number='17921264-1')
         self.lot = Lot.objects.create(announcement=ann, source_id=61773760, number='88544080-ЗЦП1')
-        UserLotWorkflow.objects.create(owner=self.owner, lot=self.lot, stage='interesting')
+        UserLotWorkflow.objects.create(owner=self.owner, lot=self.lot, stage='preparing')
         self.report = dict(schema='goszakup-restriction-v1', company_bin='241040001415',
             announcement_number=ann.number, lot_number=self.lot.number, observed_at=timezone.now().isoformat(),
             national_withdrawn=True, source_kind='lot_api',
@@ -25,7 +25,7 @@ class RestrictionReportTests(TestCase):
         self.assertEqual(response.status_code,200)
         self.lot.refresh_from_db()
         self.assertIn('Изъятие из национального режима',participation_warning(self.lot))
-        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'interesting')
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
         self.assertFalse(ApplicationPreparation.objects.exists())
         self.report.update(national_withdrawn=False, observed_at=timezone.now().isoformat())
         save_restriction_report(self.owner,self.lot.pk,self.report)

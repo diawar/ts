@@ -24,11 +24,11 @@
 <a class="skip-link" href="#main-content">К содержимому</a>
 <header class="public-header"><div class="shell header-inner">
   <a class="brand" href="{% url 'landing' %}" aria-label="TenderSearch — главная">Tender<span>Search</span></a>
-  <nav class="section-nav" aria-label="О сервисе"><a href="{% url 'catalog' %}">Каталог закупок</a><a href="{% url 'landing' %}#features">Возможности</a><a href="{% url 'landing' %}#workflow">Встроенная CRM</a><a href="{% url 'landing' %}#pricing">Тарифы</a><a href="{% url 'guides' %}">Статьи</a></nav>
-  <div class="header-actions">{% if user.is_authenticated %}<a class="btn btn-small" href="{% url 'dashboard' %}">В приложение {% icon 'arrow-up-right' %}</a>{% else %}<a class="login-link" href="{% url 'login' %}">Войти</a><a class="btn btn-small" href="{% url 'register' %}">Регистрация</a>{% endif %}</div>
+  <nav class="section-nav" aria-label="О сервисе"><a href="{% url 'catalog' %}">Каталог закупок</a><a href="{% url 'landing' %}#features">Возможности</a><a href="{% url 'landing' %}#workflow">Встроенная CRM</a><a href="{% url 'guides' %}">Статьи</a></nav>
+  <div class="header-actions"><a class="login-link" href="{% url 'login' %}">Войти</a><a class="btn btn-small" href="{% url 'register' %}">Регистрация</a></div>
 </div></header>
 <main id="main-content">{% for message in messages %}<div class="shell public-message" role="status">{{ message }}</div>{% endfor %}{% block content %}{% endblock %}</main>
-<footer class="public-footer shell"><a class="brand" href="{% url 'landing' %}">Tender<span>Search</span></a><p>Рабочий инструмент поставщика в Казахстане.</p><a href="{% url 'catalog' %}">Каталог закупок</a><a class="footer-guides" href="{% url 'guides' %}">Статьи о тендерах</a><a href="{% url 'landing' %}#pricing">Условия доступа</a><a href="mailto:support@tender-search.kz" aria-label="Обратная связь: support@tender-search.kz">support@tender-search.kz</a></footer>
+<footer class="public-footer shell"><a class="brand" href="{% url 'landing' %}">Tender<span>Search</span></a><p>Рабочий инструмент поставщика в Казахстане.</p><a href="{% url 'catalog' %}">Каталог закупок</a><a class="footer-guides" href="{% url 'guides' %}">Статьи о тендерах</a><a href="mailto:support@tender-search.kz" aria-label="Обратная связь: support@tender-search.kz">support@tender-search.kz</a></footer>
 </body></html>
 
 

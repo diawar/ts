@@ -38,7 +38,7 @@ class PagePerformanceTests(TestCase):
         from .views import lot_ui_state
         lots=Lot.objects.bulk_create([Lot(announcement=self.lot.announcement,source_id=i,name=f'Item {i}') for i in range(100,200)])
         profile=SearchProfile.objects.create(owner=self.owner,name='Own')
-        CollectionLot.objects.bulk_create([CollectionLot(profile=profile,lot=lot,stage='interesting') for lot in lots])
+        CollectionLot.objects.bulk_create([CollectionLot(profile=profile,lot=lot,stage='preparing') for lot in lots])
         Favorite.objects.create(owner=self.owner,lot=lots[0])
         other=get_user_model().objects.create_user('other-page-owner')
         Favorite.objects.create(owner=other,lot=lots[1])

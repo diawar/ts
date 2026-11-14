@@ -10,10 +10,10 @@ function setup({installed=true,origin='http://localhost:8000',path='/lots/27723/
  const window={addEventListener(type,fn){if(type==='message')handlers.add(fn);},removeEventListener(type,fn){handlers.delete(fn);},
   postMessage(data,target){assert.equal(target,origin);setImmediate(()=>{for(const fn of [...handlers])void fn({data,origin,source:window});});}};
  window.top=window;
- const context={window,document:{querySelector:key=>nodes[key]},location:{origin,pathname:path,href:origin+path},
-  GOSZAKUP_APP_ORIGINS:['http://localhost:8000'],URL,JSON,crypto:{randomUUID},setTimeout:installed?setTimeout:(fn)=>setTimeout(fn,0),clearTimeout,
-  chrome:{runtime:{id:'abcdefghijklmnopabcdefghijklmnop',sendMessage:async message=>{sent.push(message);return {prepared:true,opened:true};}}},
-  fetch:async(url,options)=>{fetches.push({url,options});return {ok:true,redirected:false,headers:{get:()=> 'application/json'},json:async()=>structuredClone(packet)};}};
+ const context={window,document:{readyState:'complete',body:{dataset:{userId:'1'}},querySelector:key=>nodes[key]},location:{origin,pathname:path,href:origin+path},
+  GOSZAKUP_APP_ORIGINS:['http://localhost:8000'],URL,JSON,AbortSignal,crypto:{randomUUID},setTimeout:installed?setTimeout:(fn)=>setTimeout(fn,0),clearTimeout,
+  chrome:{runtime:{id:'abcdefghijklmnopabcdefghijklmnop',onMessage:{addListener(){}},sendMessage:async message=>{sent.push(message);return {prepared:true,opened:true};}}},
+  fetch:async(url,options)=>{if(url==='/account/identity/')return {ok:true,json:async()=>({user_id:'1'})};fetches.push({url,options});return {ok:true,redirected:false,headers:{get:()=> 'application/json'},json:async()=>structuredClone(packet)};}};
  vm.createContext(context);
  if(installed){vm.runInContext(bridgeSource,context);vm.runInContext(bridgeSource,context);}
  if(page)vm.runInContext(pageSource,context);
@@ -24,6 +24,7 @@ function setup({installed=true,origin='http://localhost:8000',path='/lots/27723/
  const first=button.listeners.click();await button.listeners.click();await first;
  assert.equal(app.sent.length,1);assert.equal(app.fetches.length,1);
  assert.equal(app.sent[0].type,'bridge:prepare');assert.equal(app.sent[0].packet.repeat_product,undefined);
+ assert.equal(app.sent[0].account_id,'1');
  assert.equal(app.fetches[0].url,'http://localhost:8000/lots/27723/preparation/export/');
  assert.equal(app.fetches[0].options.credentials,'same-origin');
  assert.match(app.nodes['#preparation-bridge-result'].textContent,/Данные переданы/);

@@ -5,12 +5,13 @@ from .models import CompanySettings, Lot
 
 
 class LotControlTests(SimpleTestCase):
-    def test_company_defaults_exclude_personal_phone(self):
+    def test_company_defaults_exclude_personal_details(self):
         company = CompanySettings()
-        self.assertEqual(company.company_bin, '')
-        self.assertEqual(company.address_office, '25Б')
-        self.assertEqual(company.bank_account, 'KZ92601A241008980281')
-        self.assertEqual(company.contact_phone, '')
+        for name in ('company_bin','company_name','address_city','address_street',
+                     'address_house','address_office','legal_address','bank_account',
+                     'bank_name','bank_bic','contact_phone'):
+            with self.subTest(field=name):
+                self.assertEqual(getattr(company,name),'')
         self.assertTrue(company.is_vat_payer)
 
     def test_portal_link_opens_cabinet_announcement_and_number_is_escaped(self):

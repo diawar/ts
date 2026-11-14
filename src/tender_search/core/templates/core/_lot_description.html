@@ -2,7 +2,7 @@
   <h2>Описание и условия</h2>
   <div class="lot-description-text">{{ lot_description|default:'Текстовое описание не предоставлено источником. Проверьте документацию на портале.'|linebreaks }}</div>
   <dl class="lot-conditions">
-    <div><dt>Объявление</dt><dd><span class="lot-announcement-number">{{ lot.announcement.number }}</span><span>{{ lot.announcement.name }}</span></dd></div>
+    <div><dt>Объявление</dt><dd><span class="lot-announcement-number">{{ lot.announcement.number }} {% include 'core/_copy_announcement_number.html' %}</span><span>{{ lot.announcement.name }}</span></dd></div>
     <div><dt>Статус объявления</dt><dd><span class="badge">{{ lot.announcement.status|default:'Ожидает проверки' }}</span></dd></div>
     <div><dt>Способ закупки</dt><dd>{{ lot.raw.purchase_method_name|default:'Не указан' }}</dd></div>
     <div><dt>Место поставки</dt><dd>{% for address in lot.raw.delivery_addresses %}<div>{{ address.name_ru }}</div>{% empty %}Не указано{% endfor %}</dd></div>

@@ -40,7 +40,9 @@ class AwaitingResultsTests(TestCase):
         self.assertEqual(len(page.context['items']),1)
         self.assertEqual(next(s['count'] for s in page.context['steps'] if s['key']=='awaiting_results'),1)
         self.assertContains(page,'Ожидаем итоги')
-        self.assertContains(page,'Проверить черновики на Госзакупе')
+        self.assertNotContains(page,'Проверить черновики на Госзакупе')
+        self.assertContains(page,'Наличие сохранённых черновиков проверяется фоном')
+        self.assertContains(page,'data-check-ready="true"')
         self.assertContains(self.client.get(f'/lots/{self.lot.pk}/preparation/'),'Просмотр сохранённых данных')
         self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/preparation/',self.data).status_code,403)
 

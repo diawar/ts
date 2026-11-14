@@ -14,6 +14,7 @@ class SubmissionPathTests(TestCase):
         self.url=f'/lots/{self.lot.pk}/preparation/'
 
     def test_price_only_in_preparation_and_never_submits(self):
+        update_workflow(self.owner.pk,self.lot.pk,stage='new')
         self.assertEqual(self.client.post(self.endpoint,{'confirm_discount':'on','unit_gross':'116'}).status_code,403)
         update_workflow(self.owner.pk,self.lot.pk,stage='preparing')
         for value in ['116','232']:
@@ -58,7 +59,7 @@ class SubmissionPathTests(TestCase):
         self.lot.raw={'system_id':1,'purchase_method_id':12}
         self.lot.save()
         self.lot.announcement.external_id=100;self.lot.announcement.save()
-        target='/workspace/?profile=all&stage=interesting&sort=end&per_page=100'
+        target='/workspace/?profile=all&stage=preparing&sort=end&per_page=100'
         response=self.client.post('/workspace/drafts/add/',{'lots':[str(self.lot.pk)],'return_to':target})
         self.assertEqual(response.url,target)
         self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')

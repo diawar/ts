@@ -1,0 +1,2 @@
+<span class="procurement-number"><span class="number-label">Лот</span> <span>{{ lot.number|default:'—' }}</span>{% include 'core/_copy_lot_number.html' %}</span>
+{% if lot.announcement.number %}<span class="procurement-number"><span class="number-label">Объявление</span> <span>{{ lot.announcement.number }}</span>{% include 'core/_copy_announcement_number.html' %}</span>{% endif %}

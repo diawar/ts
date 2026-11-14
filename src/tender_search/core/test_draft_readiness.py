@@ -58,20 +58,20 @@ class DraftReadinessTests(TestCase):
         self.assertTrue(row.select_one('.queue-start').has_attr('disabled'))
         self.assertFalse(row.select_one('.queue-prepare').has_attr('aria-disabled'))
         self.assertIn('Заполните данные',row.get_text())
-        self.assertEqual(self.client.post(self.base+'packet/').status_code,400)
+        self.assertEqual(self.client.post(self.base+'packet/',{'launch_guard':'1'}).status_code,400)
 
     def test_valid_data_enables_launch_and_missing_required_field_blocks_it(self):
         self.assertFalse(self.row().select_one('.queue-start').has_attr('disabled'))
         prep=ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot)
         prep.data['bank_account']='';prep.save()
         self.assertTrue(self.row().select_one('.queue-start').has_attr('disabled'))
-        self.assertEqual(self.client.post(self.base+'packet/').status_code,400)
+        self.assertEqual(self.client.post(self.base+'packet/',{'launch_guard':'1'}).status_code,400)
 
     def test_company_type_and_bin_are_checked(self):
         for changes in [{'taxpayer_type':''},{'company_bin':'123456789012'}]:
             CompanySettings.objects.filter(owner=self.owner).update(**changes)
             self.assertTrue(self.row().select_one('.queue-start').has_attr('disabled'))
-            self.assertEqual(self.client.post(self.base+'packet/').status_code,400)
+            self.assertEqual(self.client.post(self.base+'packet/',{'launch_guard':'1'}).status_code,400)
 
     def test_filling_disables_all_row_actions_and_server_rejects_second_launch(self):
         for state in ['running','waiting']:
@@ -84,4 +84,4 @@ class DraftReadinessTests(TestCase):
             page=BeautifulSoup(self.client.get(f'/lots/{self.lot.pk}/preparation/').content,'html.parser')
             self.assertTrue(page.select_one('[name=unit_gross]').has_attr('disabled'))
             self.assertTrue(row.select_one('.queue-remove').has_attr('disabled'))
-            self.assertEqual(self.client.post(self.base+'packet/').status_code,400)
+            self.assertEqual(self.client.post(self.base+'packet/',{'launch_guard':'1'}).status_code,400)

@@ -31,19 +31,23 @@ class DraftQueueTests(TestCase):
         p=ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot)
         self.assertEqual(p.portal_state,'unconfirmed')
         self.assertContains(self.client.get('/workspace/drafts/'),'Ожидает')
-        self.assertContains(self.client.get('/workspace/drafts/'),'Подготовка заявки')
+        self.assertContains(self.client.get('/workspace/drafts/'),'В работе')
         self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
 
     def test_packet_registry_rows_do_not_require_repeat_consent(self):
-        response=self.client.post(self.base+'packet/')
+        response=self.client.post(self.base+'packet/',{'launch_guard':'1'})
         self.assertEqual(response.status_code,200)
+        self.item.refresh_from_db()
         self.assertEqual(response.json()['queue_context']['generation'],str(self.item.generation))
         self.assertNotIn('repeat_product',response.json()['packet'])
+        self.client.post(self.base+'guard/',json.dumps({'generation':str(self.item.generation),'release':True,'idle':True}),content_type='application/json')
         self.lot.raw['_pricing_detail']['plan_items'].append({'id':2,'purchase_method':{'id':12}});self.lot.save()
-        self.assertEqual(self.client.post(self.base+'packet/').status_code,200)
-        self.assertEqual(self.client.post(self.base+'packet/',{'repeat_product':'on'}).status_code,200)
+        self.assertEqual(self.client.post(self.base+'packet/',{'launch_guard':'1'}).status_code,200)
+        self.item.refresh_from_db()
+        self.client.post(self.base+'guard/',json.dumps({'generation':str(self.item.generation),'release':True,'idle':True}),content_type='application/json')
+        self.assertEqual(self.client.post(self.base+'packet/',{'repeat_product':'on','launch_guard':'1'}).status_code,200)
         UserLotWorkflow.objects.filter(owner=self.owner,lot=self.lot).update(stage='applied')
-        self.assertEqual(self.client.post(self.base+'packet/',{'repeat_product':'on'}).status_code,400)
+        self.assertEqual(self.client.post(self.base+'packet/',{'repeat_product':'on','launch_guard':'1'}).status_code,400)
 
     def test_progress_saves_description_without_submitting_and_is_idempotent(self):
         observed=timezone.now().isoformat()
@@ -65,10 +69,10 @@ class DraftQueueTests(TestCase):
 
     def test_private_queue_and_csrf(self):
         strict=Client(enforce_csrf_checks=True);strict.force_login(self.owner)
-        self.assertEqual(strict.post(self.base+'packet/').status_code,403)
+        self.assertEqual(strict.post(self.base+'packet/',{'launch_guard':'1'}).status_code,403)
         self.client.force_login(self.other)
-        self.assertNotContains(self.client.get('/workspace/drafts/'),self.lot.number)
-        self.assertEqual(self.client.post(self.base+'packet/').status_code,404)
+        self.assertNotContains(self.client.get('/workspace/drafts/'),'data-queue-id=')
+        self.assertEqual(self.client.post(self.base+'packet/',{'launch_guard':'1'}).status_code,404)
         self.assertEqual(self.post_progress().status_code,400)
 
     def test_cancelled_generation_cannot_receive_old_browser_reports(self):
@@ -143,24 +147,25 @@ class DraftQueueTests(TestCase):
         self.assertNotEqual(str(self.item.generation),old_generation)
         prep=ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot)
         self.assertEqual(prep.data,before);self.assertEqual(prep.portal_number,'')
-        packet=self.client.post(self.base+'packet/').json()['packet']
+        packet=self.client.post(self.base+'packet/',{'launch_guard':'1'}).json()['packet']
+        self.item.refresh_from_db()
         self.assertEqual(packet['reset_absent_application'],'123')
         self.assertEqual(packet['existing_application_number'],'')
         self.assertEqual(self.post_progress().status_code,200)
-        self.assertNotIn('reset_absent_application',self.client.post(self.base+'packet/').json().get('packet',{}))
+        self.assertNotIn('reset_absent_application',self.client.post(self.base+'packet/',{'launch_guard':'1'}).json().get('packet',{}))
 
     def test_expired_queue_leaves_preparation_stage_and_preserves_saved_data(self):
         from datetime import timedelta
         self.lot.announcement.deadline=timezone.now()-timedelta(seconds=1)
         self.lot.announcement.save()
         old_generation=self.item.generation
-        response=self.client.post(self.base+'packet/')
+        response=self.client.post(self.base+'packet/',{'launch_guard':'1'})
         self.assertTrue(response.json()['skipped'])
         self.item.refresh_from_db();self.assertEqual(self.item.state,'cancelled')
         self.assertNotEqual(self.item.generation,old_generation)
         self.assertTrue(ApplicationPreparation.objects.filter(owner=self.owner,lot=self.lot).exists())
         workflow=UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot)
-        self.assertEqual(workflow.stage,'interesting')
+        self.assertEqual(workflow.stage,'awaiting_results')
         self.assertTrue(workflow.result_tracking)
         page=self.client.get('/workspace/drafts/')
         self.assertNotIn(self.item.pk,[item.pk for item in page.context['items']])
@@ -181,8 +186,8 @@ class DraftQueueTests(TestCase):
                 DraftQueueItem.objects.filter(pk=self.item.pk).update(state=state)
                 update_workflow(self.owner.pk,self.lot.pk,stage='preparing',result_tracking=True)
                 expire_draft_queue(self.owner)
-                self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'interesting')
-                self.assertFalse(CollectionLot.objects.filter(profile__owner=self.owner,lot=self.lot).exclude(stage='interesting').exists())
+                self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'awaiting_results')
+                self.assertFalse(CollectionLot.objects.filter(profile__owner=self.owner,lot=self.lot).exclude(stage='awaiting_results').exists())
                 self.assertTrue(LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot).enabled)
                 self.assertEqual(ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot).data,before)
                 self.item.refresh_from_db()

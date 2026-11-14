@@ -47,7 +47,7 @@ def budget_unit_price(lot):
 def pricing_detail_snapshot(detail):
     result = {key: detail.get(key) for key in ('id', 'system', 'is_combined')}
     plans = detail.get('plan_items')
-    result['plan_items'] = [{key: plan.get(key) for key in ('id','count','measure','purchase_method','system','unit_price','total_price')} for plan in plans if isinstance(plan, dict)] if isinstance(plans, list) else None
+    result['plan_items'] = [{key: plan.get(key) for key in ('id','external_id','count','measure','purchase_method','system','unit_price','total_price')} for plan in plans if isinstance(plan, dict)] if isinstance(plans, list) else None
     return result
 
 
@@ -197,7 +197,7 @@ def pricing_context(owner, lot, form=None, *, company=_COMPANY_UNSET):
     if entry is None:return {}
     saved=UserLotPrice.objects.filter(owner=owner,lot=lot).first()
     stages=set(CollectionLot.objects.filter(profile__owner=owner,lot=lot).values_list('stage',flat=True))
-    interested=bool(stages & {'interesting','preparing'})
+    interested=bool(stages & {'preparing'})
     if not interested and saved is None:return {}
     policy=verified_pricing(lot)
     entry['confirmed']=policy is not None
@@ -230,14 +230,77 @@ def pricing_context(owner, lot, form=None, *, company=_COMPANY_UNSET):
     return {'price_budget':budget,'price_editable':editable,'price_has_vat':rate > 0,'price_policy':entry,'price_form':form,'price_result':result,'price_locked':locked,'saved_price':saved,'price_can_cancel':can_cancel}
 
 
+def combined_budget_display(lot, detail, plans):
+    """Display a total only when distinct plan positions reconcile with the lot.
+
+    The source can return multiple lifecycle versions of one external plan ID.
+    Collapse those only if their quantity, measure and price agree. This is a
+    display calculation; bid pricing/export rules remain single-position only.
+    """
+    unknown = {'multiple': True}
+    if not plans or lot.amount is None:
+        return unknown
+    positions = {}
+    try:
+        for plan in plans:
+            if not isinstance(plan, dict):
+                return unknown
+            count = Decimal(str(plan.get('count')))
+            unit = Decimal(str(plan.get('unit_price')))
+            if (not count.is_finite() or not 0 < count <= Decimal('1000000000000')
+                    or count.as_tuple().exponent < -6 or not unit.is_finite() or unit < 0):
+                return unknown
+            measure = plan.get('measure') or {}
+            measure_name = (measure.get('name_ru') or measure.get('name') or measure.get('short_name') or '') if isinstance(measure, dict) else str(measure)
+            measure_key = str(measure.get('id') or measure_name.casefold()) if isinstance(measure, dict) else measure_name.casefold()
+            if not measure_key:
+                return unknown
+            system = plan.get('system') or detail.get('system')
+            system_id = str(system.get('id')) if isinstance(system, dict) else str(system or '')
+            # Scope external IDs to their source system. Never guess identity
+            # from a product name or silently choose conflicting plan versions.
+            external_id = plan.get('external_id')
+            if external_id and system_id:
+                key = (system_id, 'external', str(external_id))
+            elif plan.get('id'):
+                key = ('plan', str(plan['id']))
+            else:
+                return unknown
+            value = (count, unit, measure_key, measure_name)
+            if key in positions and positions[key][:3] != value[:3]:
+                return unknown
+            positions[key] = value
+        values = list(positions.values())
+        if len({value[2] for value in values}) != 1:
+            return unknown
+        with localcontext() as ctx:
+            ctx.prec = 70
+            quantity = sum((value[0] for value in values), Decimal('0'))
+            total = sum((value[0] * value[1] for value in values), Decimal('0'))
+            if not lot.amount.is_finite() or total.quantize(CENT) != lot.amount.quantize(CENT):
+                return unknown
+        units = {value[1] for value in values}
+        system = detail.get('system')
+        system_id = system.get('id') if isinstance(system, dict) else system
+        return {'quantity': quantity, 'unit': values[0][1] if len(units) == 1 else None,
+                'measure': values[0][3], 'net': lot.announcement.source == 'zakup' and str(system_id) == '1',
+                'multiple': True, 'positions': len(values), 'varied_units': len(units) > 1}
+    except (InvalidOperation, KeyError, TypeError, ValueError):
+        return unknown
+
+
 def lot_budget_display(lot, detail=None):
     """Public quantity and unit budget, with no implicit per-row DB requests."""
     if hasattr(lot, '_budget_display') and detail is None:
         return lot._budget_display
     detail = detail if detail is not None else (lot.raw or {}).get('_pricing_detail')
-    if not isinstance(detail, dict) or detail.get('id') != lot.source_id or detail.get('is_combined') is not False:
+    if not isinstance(detail, dict) or detail.get('id') != lot.source_id:
         return {}
     plans = detail.get('plan_items')
+    if detail.get('is_combined') is True:
+        return combined_budget_display(lot, detail, plans) if isinstance(plans, list) else {'multiple': True}
+    if detail.get('is_combined') is not False:
+        return {}
     if not isinstance(plans, list) or len(plans) != 1 or not isinstance(plans[0], dict):
         return {'multiple': True} if isinstance(plans, list) and len(plans) > 1 else {}
     plan = plans[0]
@@ -267,9 +330,18 @@ def lot_budget_display(lot, detail=None):
 
 def attach_lot_budgets(lots):
     """Read cached card details for the entire displayed page in one query."""
-    missing = [lot for lot in lots if lot.announcement.source == 'zakup' and (
-        not isinstance((lot.raw or {}).get('_pricing_detail'), dict)
-        or (lot.raw or {}).get('_pricing_detail', {}).get('id') != lot.source_id)]
+    def needs_card(lot):
+        if lot.announcement.source != 'zakup':
+            return False
+        detail = (lot.raw or {}).get('_pricing_detail')
+        if not isinstance(detail, dict) or detail.get('id') != lot.source_id:
+            return True
+        # Older compact snapshots omitted external plan IDs. Prefer a cached
+        # full card so lifecycle versions can be distinguished without IO.
+        plans = detail.get('plan_items')
+        return detail.get('is_combined') is True and isinstance(plans, list) and any(
+            isinstance(plan, dict) and not plan.get('external_id') for plan in plans)
+    missing = [lot for lot in lots if needs_card(lot)]
     cards = {}
     if missing:
         from django.db import connection

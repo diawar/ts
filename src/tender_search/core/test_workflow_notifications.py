@@ -103,7 +103,7 @@ class WorkflowNotificationTests(TestCase):
 
     def test_unwanted_new_lot_messages_are_cancelled(self):
         self.profile.enabled=True;self.profile.save()
-        for reason in ('expired','declined','closed'):
+        for reason in ('expired','declined','closed','closed_workflow'):
             update_workflow(self.owner.pk,self.lot.pk,stage='new')
             self.lot.announcement.deadline=timezone.now()+timedelta(days=1);self.lot.announcement.save()
             self.lot.raw=dict(self.lot.raw,status={'id':6});self.lot.save()
@@ -111,6 +111,7 @@ class WorkflowNotificationTests(TestCase):
             if reason=='expired':
                 self.lot.announcement.deadline=timezone.now()-timedelta(seconds=1);self.lot.announcement.save()
             elif reason=='declined':update_workflow(self.owner.pk,self.lot.pk,stage='not_participated')
+            elif reason=='closed_workflow':update_workflow(self.owner.pk,self.lot.pk,stage='closed')
             else:self.lot.raw['status']={'id':16};self.lot.save()
             with patch('tender_search.core.telegram_service.in_work_hours',return_value=True),patch('tender_search.core.telegram_service.telegram_api') as send:
                 deliver_pending();send.assert_not_called()

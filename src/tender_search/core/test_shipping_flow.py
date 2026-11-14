@@ -86,7 +86,7 @@ class ShippingFlowTests(TestCase):
 
     def test_two_owners_same_lot_and_filename_have_independent_acts_and_stages(self):
         first,first_content=self.upload_for(self.owner,'Owner A')
-        self.assertEqual(UserLotWorkflow.objects.get(owner=self.other,lot=self.lot).stage,'interesting')
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.other,lot=self.lot).stage,'preparing')
         second,second_content=self.upload_for(self.other,'Owner B')
         self.assertNotEqual(first.act.name,second.act.name)
         self.assertNotEqual(first_content,second_content)

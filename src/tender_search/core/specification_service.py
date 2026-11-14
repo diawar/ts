@@ -8,6 +8,7 @@ from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
 import re
 import secrets
+from hashlib import sha256
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
@@ -56,10 +57,60 @@ def extract_text(path, name):
     return text[:MAX_TEXT],len(text)>MAX_TEXT
 
 
-def cached_documents(lot):
+def shared_revision(lot):
+    """Compare shared versions without transferring extracted text on every poll."""
+    index_state=TechnicalDocumentIndex.objects.filter(lot_id=lot.pk).values_list('state',flat=True).first()
+    if index_state not in (None,'ready'):
+        return ''
+    rows=list(Document.objects.filter(announcement_id=lot.announcement_id,kind='technical').filter(
+        Q(lot_id=lot.pk)|Q(lot__isnull=True)).order_by('pk').values_list(
+            'pk','lot_id','name','url','status','current_version_id','current_version__updated_at')[:9])
+    if not rows or len(rows)>8 or any(row[4]!='ready' or not row[5] for row in rows):
+        return ''
+    return sha256(repr((index_state,rows)).encode()).hexdigest()
+
+
+def synchronize_specification(job, lot):
+    """Refresh an existing snapshot from complete public cache, without source I/O."""
+    if not job or job.state not in ('done','partial'):
+        return job
+    revision=shared_revision(lot)
+    if not revision or revision==job.shared_revision:
+        return job
+    complete=TechnicalDocumentIndex.objects.filter(lot_id=lot.pk,state='ready').exists()
+    documents=cached_documents(lot,require_fresh=False,require_index=complete)
+    if documents and not complete:
+        # Legacy snapshots predate the shared index. Only replace known files;
+        # an unindexed cache cannot prove that their whole file list is complete.
+        merged=[]
+        for saved in job.documents:
+            candidates=[doc for doc in documents if doc['scope']==saved.get('scope') and (
+                doc['document_id']==saved.get('document_id') if saved.get('document_id') else
+                doc['source_url']==saved.get('source_url'))]
+            if not candidates and saved.get('name'):
+                candidates=[doc for doc in documents if
+                    doc['scope']==saved.get('scope') and doc['name']==saved['name']]
+            merged.append(candidates[0] if len(candidates)==1 else saved)
+        documents=merged
+    # A writer may change a pointer during the read. Keep the last good snapshot
+    # and retry on the next request instead of recording a mixed revision.
+    if not documents or revision!=shared_revision(lot):
+        return job
+    changed=LotSpecification.objects.filter(pk=job.pk,generation=job.generation,
+        state=job.state,updated_at=job.updated_at).update(documents=documents,
+            shared_revision=revision,state='done' if complete else job.state,
+            error='' if complete else job.error,updated_at=timezone.now())
+    if changed:
+        job.refresh_from_db()
+    return job
+
+
+def cached_documents(lot, *, require_fresh=True, require_index=True):
     # Only a complete shared index proves that no required file is missing.
-    if not TechnicalDocumentIndex.objects.filter(lot=lot,state='ready',
-            checked_at__gt=timezone.now()-timedelta(days=1)).exists():
+    index=TechnicalDocumentIndex.objects.filter(lot=lot,state='ready')
+    if require_fresh:
+        index=index.filter(checked_at__gt=timezone.now()-timedelta(days=1))
+    if require_index and not index.exists():
         return []
     files=list(Document.objects.filter(announcement_id=lot.announcement_id,kind='technical').filter(
         Q(lot_id=lot.pk)|Q(lot__isnull=True)).select_related('current_version').order_by('pk')[:9])
@@ -68,7 +119,7 @@ def cached_documents(lot):
     for file in files:
         version=file.current_version
         if file.status!='ready' or not version or not version.text:return []
-        result.append({'name':file.name,'text':version.text,'source_url':file.url,
+        result.append({'document_id':file.pk,'name':file.name,'text':version.text,'source_url':file.url,
                        'scope':'lot' if file.lot_id else 'announcement',
                        'truncated':bool(version.pages and version.pages[0].get('truncated'))})
     return result
@@ -81,15 +132,19 @@ def queue_specification(owner, lot, *, refresh=False):
         job=LotSpecification.objects.select_for_update().get(pk=job.pk)
         if job.state in ('queued','running') and job.generation and job.updated_at>timezone.now()-timedelta(minutes=15):return job
         if not refresh:
-            if job.state=='done' and job.documents:return job
+            if job.state=='done' and job.documents:
+                return synchronize_specification(job,lot)
+            revision=shared_revision(lot)
             documents=cached_documents(lot)
-            if documents:
+            if documents and revision and revision==shared_revision(lot):
                 job.documents=documents;job.state='done';job.error='';job.generation=secrets.token_hex(16)
-                job.save(update_fields=['documents','state','error','generation','updated_at'])
+                job.shared_revision=revision
+                job.save(update_fields=['documents','state','error','generation','shared_revision','updated_at'])
                 return job
         generation=secrets.token_hex(16)
         job.state='queued';job.generation=generation;job.error=''
-        job.save(update_fields=['state','generation','error','updated_at'])
+        job.shared_revision=''
+        job.save(update_fields=['state','generation','error','shared_revision','updated_at'])
     try:extract_lot_specification.delay(job.pk,generation)
     except Exception:
         LotSpecification.objects.filter(pk=job.pk,generation=generation).update(state='error',error='Очередь извлечения недоступна. Повторите позже.')
@@ -105,6 +160,8 @@ def process_specification(job_id, generation):
         with lot_client(job.lot_id) as api:
             files=[file for file in api.documents(job.lot.announcement.source_id) if file.lot_id in (None,job.lot.source_id) and technical_file(file)]
             if not files:
+                TechnicalDocumentIndex.objects.update_or_create(lot_id=job.lot_id,
+                    defaults={'state':'not_found','checked_at':timezone.now(),'error':''})
                 LotSpecification.objects.filter(pk=job_id,generation=generation).update(state='not_found',error='Связанная техническая спецификация не найдена среди файлов портала.',updated_at=timezone.now());return
             work=Path(settings.MEDIA_ROOT)/'specification-work';work.mkdir(parents=True,exist_ok=True)
             with TemporaryDirectory(dir=work) as temporary:
@@ -114,10 +171,16 @@ def process_specification(job_id, generation):
                         version=cache_file(job.lot,file,api)
                         text=version.text
                         truncated=bool(version.pages and version.pages[0].get('truncated'))
-                        documents.append({'name':file.name,'text':text,'source_url':file.url,'scope':'lot' if file.lot_id else 'announcement','truncated':truncated})
+                        documents.append({'document_id':version.document_id,'name':file.name,'text':text,'source_url':file.url,'scope':'lot' if file.lot_id else 'announcement','truncated':truncated})
                     except Exception as exc:
                         errors.append(str(exc)[:200] if isinstance(exc,SourceError) else 'Не удалось извлечь текст одного из документов.')
                 if len(files)>8:errors.append('Показаны первые 8 технических документов.')
+        # An on-demand extraction also checks the complete public file list.
+        # Publish that result so other owners do not wait for the indexer's turn;
+        # a partial extraction must not masquerade as a complete shared cache.
+        TechnicalDocumentIndex.objects.update_or_create(lot_id=job.lot_id,
+            defaults={'state':'partial' if errors else 'ready',
+                      'checked_at':timezone.now(),'error':' '.join(errors)[:300]})
         LotSpecification.objects.filter(pk=job_id,generation=generation).update(documents=documents,
             state='partial' if documents and errors else ('done' if documents else 'error'),error=' '.join(errors)[:300],updated_at=timezone.now())
     except Exception as exc:

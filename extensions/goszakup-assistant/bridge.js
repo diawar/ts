@@ -17,14 +17,27 @@
  }
  chrome.runtime.onMessage.addListener((message,sender,respond)=>{
   if(sender.id!==chrome.runtime.id||message?.type!=='bridge:identity')return false;
-  identity().then(respond,error=>respond({error:error.message}));return true;
+  (async()=>{
+   const account=await identity(),queue=message.queue_context;
+   if(queue){
+    if(!queuePage||!Number.isSafeInteger(queue.id)||queue.id<1||!/^[-a-f0-9]{36}$/.test(queue.generation))throw Error('Некорректный запуск очереди.');
+    const token=document.querySelector('#queue-csrf [name=csrfmiddlewaretoken]')?.value;
+    if(!token)throw Error('Обновите страницу очереди.');
+    const response=await fetch('/workspace/drafts/'+queue.id+'/guard/',{method:'POST',credentials:'same-origin',cache:'no-store',
+     headers:{'Content-Type':'application/json','X-CSRFToken':token,'X-TenderSearch-User':account.user_id},
+     body:JSON.stringify({generation:queue.generation,active:message.queue_active===true}),signal:AbortSignal.timeout(6000)});
+    if(!response.ok||(await response.json()).allowed!==true)throw Error('Запуск остановлен или очередь изменилась.');
+    account.queue_allowed=true;
+   }
+   return account;
+  })().then(respond,error=>respond({error:error.message}));return true;
  });
  let busy=false;
  const reply=(id,value)=>window.postMessage({channel,id,...value},location.origin);
  window.addEventListener('message',async event=>{
   const message=event.data;
   if(event.source!==window||event.origin!==location.origin||!message||message.channel!==channel||typeof message.id!=='string'||!/^[\w-]{16,80}$/.test(message.id))return;
-  if(message.type==='ping'){reply(message.id,{type:'ready',extensionId:chrome.runtime.id,autoQueue:true,queueCheck:true,queueReset:true});return;}
+  if(message.type==='ping'){reply(message.id,{type:'ready',extensionId:chrome.runtime.id,autoQueue:true,queueCheck:true,backgroundQueueCheck:true,queueLaunchGuard:true,queueReset:true});return;}
   if(message.type!=='prepare'&&!(queuePage&&['queue-status','queue-stop','queue-check'].includes(message.type)))return;
   if(message.extensionId!==chrome.runtime.id)return;
   if(busy){reply(message.id,{type:'result',error:'Передача уже выполняется.'});return;}

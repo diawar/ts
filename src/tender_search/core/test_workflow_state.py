@@ -23,7 +23,7 @@ class WorkflowStateTests(TestCase):
         self.assertEqual(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists(),favorite)
 
     def test_stage_matrix_and_unchanged_state_never_restarts_notifications(self):
-        for stage,favorite,watched in [('new',False,False),('interesting',True,True),('applied',True,True),
+        for stage,favorite,watched in [('new',False,False),('preparing',True,True),('applied',True,True),
             ('contract',True,True),('delivery',True,False),('payment',True,False),
             ('won',True,False),('lost',True,False),('not_participated',False,False)]:
             with self.subTest(stage=stage):
@@ -38,7 +38,7 @@ class WorkflowStateTests(TestCase):
                 self.assertEqual(StatusDelivery.objects.count(),messages)
 
     def test_bulk_changes_reconcile_and_cancel_old_pending_messages(self):
-        self.item.stage='interesting';self.item.save()
+        self.item.stage='preparing';self.item.save()
         watch=AnnouncementWatch.objects.get(owner=self.owner)
         delivery=StatusDelivery.objects.create(watch=watch,generation=watch.generation,event_key='old')
         CollectionLot.objects.filter(pk=self.item.pk).update(stage='not_participated')
@@ -49,12 +49,12 @@ class WorkflowStateTests(TestCase):
         reconcile_workflow_states();self.assert_state(True,True)
 
     def test_multiple_collections_share_state_but_owners_stay_independent(self):
-        self.item.stage='interesting';self.item.save()
+        self.item.stage='preparing';self.item.save()
         second=SearchProfile.objects.create(owner=self.owner,name='Ещё')
         record=CollectionLot.objects.create(profile=second,lot=self.lot,stage='applied')
-        self.assertEqual(record.stage,'interesting')
+        self.assertEqual(record.stage,'preparing')
         foreign=SearchProfile.objects.create(owner=self.other,name='Чужая')
-        CollectionLot.objects.create(profile=foreign,lot=self.lot,stage='interesting')
+        CollectionLot.objects.create(profile=foreign,lot=self.lot,stage='preparing')
         self.item.stage='not_participated';self.item.save();self.assert_state(False,False)
         record.refresh_from_db();self.assertEqual(record.stage,'not_participated')
         record.stage='won';record.save();self.assert_state(True,False)
@@ -68,7 +68,7 @@ class WorkflowStateTests(TestCase):
         self.assert_state(True,True)
         self.client.post(f'/lots/{self.lot.pk}/status-watch/',{'action':'off'},HTTP_HX_REQUEST='true')
         self.assert_state(True,True)
-        self.item.stage='interesting';self.item.save()
+        self.item.stage='preparing';self.item.save()
         self.assertTrue(remove_from_work(self.owner.pk,self.lot.pk))
         self.item.refresh_from_db();self.assertEqual(self.item.stage,'not_participated')
         self.assert_state(False,False)
@@ -78,12 +78,12 @@ class WorkflowStateTests(TestCase):
         self.profile.delete()
         self.client.post(f'/lots/{self.lot.pk}/favorite/',{'action':'add'})
         item=CollectionLot.objects.get(profile__owner=self.owner,lot=self.lot)
-        self.assertEqual(item.stage,'interesting')
+        self.assertEqual(item.stage,'preparing')
         self.assertFalse(item.profile.collection_enabled)
         self.assert_state(True,True)
 
     def test_inactive_lot_plane_stays_off_when_same_announcement_has_active_lot(self):
         another=store_lot(row(2,announcement_id=self.lot.announcement.source_id))
-        CollectionLot.objects.create(profile=self.profile,lot=another,stage='interesting')
+        CollectionLot.objects.create(profile=self.profile,lot=another,stage='preparing')
         self.assert_state(False,False)
         self.assertTrue(AnnouncementWatch.objects.get(owner=self.owner).enabled)

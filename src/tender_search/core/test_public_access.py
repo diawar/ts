@@ -68,7 +68,7 @@ class PublicAccessTests(TestCase):
         response = self.client.get('/search/', HTTP_HX_REQUEST='true')
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response['HX-Redirect'], '/account/access/')
-        self.assertContains(self.client.get('/account/access/'), 'Бесплатный период')
+        self.assertContains(self.client.get('/account/access/'), 'Срок доступа')
         self.assertEqual(self.client.get('/').status_code, 200)
         self.assertEqual(self.client.post('/logout/').status_code, 302)
 

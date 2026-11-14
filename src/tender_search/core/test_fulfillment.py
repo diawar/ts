@@ -42,7 +42,7 @@ class FulfillmentTests(TestCase):
         self.assertFalse(AnnouncementWatch.objects.get(owner=self.owner,announcement=self.lot.announcement).enabled)
         self.assertFalse(LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot).enabled)
         self.assertEqual(UserLotNote.objects.get(owner=self.owner,lot=self.lot).text,'Saved note')
-        self.assertEqual(CollectionLot.objects.get(profile__owner=self.other,lot=self.lot).stage,'interesting')
+        self.assertEqual(CollectionLot.objects.get(profile__owner=self.other,lot=self.lot).stage,'preparing')
 
     def test_manual_automatic_transitions_rejected_on_every_stage_and_view(self):
         from .fulfillment import actions_for

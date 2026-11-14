@@ -35,7 +35,7 @@ class FullFunnelTests(TestCase):
             state = UserLotWorkflow.objects.get(owner=self.owner, lot=self.lot)
             self.assertEqual(state.stage, expected)
             self.assertFalse(CollectionLot.objects.filter(profile__owner=self.owner, lot=self.lot).exclude(stage=expected).exists())
-            self.assertEqual(UserLotWorkflow.objects.get(owner=self.other, lot=self.lot).stage, 'interesting')
+            self.assertEqual(UserLotWorkflow.objects.get(owner=self.other, lot=self.lot).stage, 'preparing')
             return state
 
         self.client.post('/workspace/drafts/add/', {'lots': [str(self.lot.pk)]})

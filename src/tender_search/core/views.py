@@ -21,6 +21,7 @@ from .forms import SearchForm
 from . import tasks
 from tender_search.matching import matches
 from tender_search.client import utc_datetime, SchemaError
+from .profile_visibility import saved_profiles
 
 
 @login_required
@@ -42,7 +43,7 @@ def account_identity(request):
 @login_required
 def dashboard(request):
     return render(request, "core/dashboard.html", {
-        "profiles": SearchProfile.objects.filter(owner=request.user).count(),
+        "profiles": saved_profiles(request.user).count(),
         "tracked": SearchProfile.objects.filter(owner=request.user, collection_enabled=True).count(),
         "favorites": Favorite.objects.filter(owner=request.user).count(),
         "favorites_tracked": Favorite.objects.filter(owner=request.user,lot__announcement_id__in=AnnouncementWatch.objects.filter(owner=request.user,enabled=True).values("announcement_id")).count(),
@@ -56,6 +57,8 @@ def search(request):
     profile = None
     if request.GET.get("profile"):
         profile = get_object_or_404(SearchProfile, pk=request.GET["profile"], owner=request.user)
+        if profile.filters.get('manual'):
+            return redirect(reverse('workspace')+'?profile=all&stage=preparing')
         initial = profile.filters.get("form", {})
     form = SearchForm(request.POST if request.method == "POST" else None, initial=initial)
     if request.method == "POST" and request.POST.get("action") == "save":
@@ -116,7 +119,7 @@ def search(request):
                 job.finished_at = timezone.now()
                 job.save(update_fields=["status", "error", "finished_at"])
             return redirect(f"{reverse('search_results', kwargs={'job_id': job.pk})}#search-results")
-    return render(request, "core/search.html", {"form": form, "active_profile": profile, "profile_saved": bool(profile) and not form.is_bound, "profiles": SearchProfile.objects.filter(owner=request.user).order_by("-updated_at"), "recent": WebSearch.objects.filter(owner=request.user, specification__monitor_profile_id__isnull=True, specification__collection_profile_id__isnull=True).order_by("-created_at")[:7]})
+    return render(request, "core/search.html", {"form": form, "active_profile": profile, "profile_saved": bool(profile) and not form.is_bound, "profiles": saved_profiles(request.user).order_by("-updated_at"), "recent": WebSearch.objects.filter(owner=request.user, specification__monitor_profile_id__isnull=True, specification__collection_profile_id__isnull=True).order_by("-created_at")[:7]})
 
 
 @login_required
@@ -279,7 +282,7 @@ def search_results(request, job_id):
         ignored = {'depth', 'pages', 'auto_pages', 'backend'}
         profile_saved = {k:v for k,v in current_spec.items() if k not in ignored} == {k:v for k,v in active_profile.filters.get('specification', {}).items() if k not in ignored}
     return render(request, "core/results.html", {**sort_context, "active_profile": active_profile, "profile_saved": profile_saved, "job": job, "local_coverage": job.source_counts.get("__index__"), "page": page, "pending": job.status in {"queued", "running"},
-         "form": SearchForm(initial=initial), "profiles": SearchProfile.objects.filter(owner=request.user).order_by("-updated_at")})
+         "form": SearchForm(initial=initial), "profiles": saved_profiles(request.user).order_by("-updated_at")})
 
 
 def queue_refresh(lot):
@@ -326,10 +329,12 @@ def expire_lot_jobs(lot, batch=None, specification=None):
 @login_required
 def lot_detail_status(request, lot_id):
     # Poll metadata only; never reload large document texts or enqueue a new refresh.
-    lot = get_object_or_404(Lot.objects.only('refresh_state', 'refresh_error', 'refresh_started_at', 'checked_at'), pk=lot_id)
+    lot = get_object_or_404(Lot.objects.only('announcement_id', 'refresh_state', 'refresh_error', 'refresh_started_at', 'checked_at'), pk=lot_id)
     favorite = Favorite.objects.filter(owner=request.user, lot_id=lot_id).exists()
     batch = LotDocumentDownload.objects.filter(lot_id=lot_id).first() if favorite else None
     specification = LotSpecification.objects.filter(owner=request.user, lot_id=lot_id).defer('documents').first()
+    from .specification_service import synchronize_specification
+    specification = synchronize_specification(specification,lot)
     expire_lot_jobs(lot, batch, specification)
     revisions = lot_revisions(lot, batch, specification)
     pending = lot.refresh_state == 'running' or any(job and job.state in ('queued', 'running') for job in (batch, specification))
@@ -377,6 +382,8 @@ def lot_detail(request, lot_id, price_form=None, updates=False):
         for doc in Document.objects.filter(announcement=lot.announcement).filter(Q(lot=lot)|Q(lot__isnull=True)).annotate(saved_version_id=Coalesce(F('current_version_id'), Subquery(latest))).order_by('name'):
             documents.append(doc)
     specification = LotSpecification.objects.filter(owner=request.user,lot=lot).first()
+    from .specification_service import synchronize_specification
+    specification = synchronize_specification(specification,lot)
     expire_lot_jobs(lot, batch, specification)
     from .lot_pricing import pricing_context
     from .shipping import context as shipment_context
@@ -413,7 +420,7 @@ def lot_price_save(request, lot_id):
     from .outcome_service import register_watch
     from django.contrib import messages
     lot = get_object_or_404(Lot.objects.select_related('announcement'), pk=lot_id)
-    if DraftQueueItem.objects.filter(owner=request.user,lot=lot,state__in=('running','waiting')).exists():
+    if DraftQueueItem.objects.filter(owner=request.user,lot=lot,state__in=('launching','running','waiting')).exists():
         raise PermissionDenied
     if price_entry_data(lot) is None:
         raise PermissionDenied
@@ -477,13 +484,13 @@ def lot_refresh(request, lot_id):
 @require_POST
 def favorite(request, lot_id):
     lot = get_object_or_404(Lot, pk=lot_id)
-    from .workflow_state import add_to_interesting, remove_from_work
+    from .workflow_state import add_to_participation, remove_from_work
     error = ''
     if request.POST.get('action') == 'remove':
         if not remove_from_work(request.user.pk,lot.pk):
             error = 'Лот уже в работе. Снять звезду можно после явного завершения или отказа.'
     elif request.POST.get('action') == 'add':
-        add_to_interesting(request.user.pk,lot.pk)
+        add_to_participation(request.user.pk,lot.pk)
     if request.headers.get("HX-Request"):
         result_context(request, [lot])
         return render(request, "core/_lot_actions.html", {"lot": lot, "update_favorite_count": True, "watch_error": error, "return_to": request.POST.get("next", "")})
@@ -511,7 +518,7 @@ def favorites(request):
     page = Paginator(lots, 25).get_page(request.GET.get('page'))
     result_context(request, list(page))
     headers = []
-    for label, sort_key in [('Лот и заказчик', ''), ('Сумма, ₸', 'amount'), ('Даты заявки', ''), ('Статус', 'status'), ('Дата добавления', 'added')]:
+    for label, sort_key in [('Лот и заказчик', ''), ('Кол-во', ''), ('Цена за единицу', ''), ('Сумма, ₸', 'amount'), ('Даты заявки', ''), ('Статус', 'status'), ('Дата добавления', 'added')]:
         active = key == sort_key
         headers.append({'label': label, 'sort': ('-' if active and not descending else '') + sort_key,
                         'sortable': bool(sort_key), 'arrow': ('↓' if descending else '↑') if active else '↕',

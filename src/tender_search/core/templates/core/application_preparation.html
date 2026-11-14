@@ -2,9 +2,9 @@
 {% block title %}Подготовка заявки — TenderSearch{% endblock %}
 {% block content %}
 <div class="preparation-page">
-<div class="page-heading"><div>{% if workflow_stage == 'awaiting_results' %}<a href="{% url 'draft_queue' %}?stage=awaiting_results">← Ожидаем итоги</a>{% else %}<a href="{% url 'workspace' %}?profile=all&amp;stage=preparing">← К подготовке заявок</a>{% endif %}<h1>Подготовка заявки</h1></div><a href="{% url 'notification_settings' %}#chrome-extension">Установка расширения</a></div>
+<div class="page-heading"><div>{% if workflow_stage == 'awaiting_results' %}<a href="{% url 'draft_queue' %}?stage=awaiting_results">← Ожидаем итоги</a>{% else %}<a href="{% url 'workspace' %}?profile=all&amp;stage=preparing">← К этапу «В работе»</a>{% endif %}<h1>Подготовка заявки</h1></div><a href="{% url 'notification_settings' %}#chrome-extension">Установка расширения</a></div>
 <section class="panel preparation-summary">
-<h2>{{ lot.name }}</h2><p>Лот {{ lot.number }} {% include 'core/_copy_lot_number.html' %} · Объявление {{ lot.announcement.number }}</p>
+<h2>{{ lot.name }}</h2><p>Лот {{ lot.number }} {% include 'core/_copy_lot_number.html' %} · Объявление {{ lot.announcement.number }} {% include 'core/_copy_announcement_number.html' %}</p>
 {% participation_warning lot %}
 <div class="preparation-status" role="status">
 <strong>{% if preparation.portal_state == 'submitted' %}Заявка подана{% elif preparation.portal_state == 'completed' %}Заявка завершена на портале{% elif preparation.portal_description_saved_at %}Черновик заполнен{% elif preparation.portal_state == 'draft' %}Черновик создан · заполнение не завершено{% elif preparation %}Данные сохранены · черновик ещё не подтверждён{% else %}Заполните данные для черновика{% endif %}</strong>
@@ -12,7 +12,7 @@
 </div>
 {% if preparation.portal_sync_error %}<p class="error">{{ preparation.portal_sync_error }}</p>{% endif %}
 {% if bin_changed %}<p class="error">БИН организации изменён. Проверьте реквизиты и сохраните подготовку заново.</p>{% endif %}
-{% if not editable %}<p class="muted">{% if preparation_busy %}Идёт заполнение черновика. Чтобы изменить данные, сначала остановите заполнение в расширении.{% else %}Просмотр сохранённых данных. Редактирование доступно на этапе «Подготовка заявки».{% endif %}</p>{% endif %}
+{% if not editable %}<p class="muted">{% if preparation_busy %}Идёт заполнение черновика. Чтобы изменить данные, сначала остановите заполнение в расширении.{% else %}Просмотр сохранённых данных. Редактирование доступно на этапе «В работе».{% endif %}</p>{% endif %}
 </section>
 <section class="panel"><h2>Товар, цена и реквизиты</h2>
 <p class="muted">БИН {{ company_bin|default:'не указан' }} · <a href="{% url 'notification_settings' %}#company-settings">Реквизиты организации</a></p>

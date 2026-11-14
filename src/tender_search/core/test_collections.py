@@ -35,6 +35,38 @@ class CollectionsTests(TestCase):
         self.profile.refresh_from_db()
         update_collection(self.profile.pk, 'lease', self.profile.collection_revision)
 
+    def test_manual_storage_is_hidden_but_aggregate_keeps_its_lots(self):
+        from .workflow_state import add_to_participation
+        self.profile.delete()
+        lot=store_lot(row(99,name_ru='Лот, добавленный вручную'))
+        add_to_participation(self.owner.pk,lot.pk)
+        manual=SearchProfile.objects.get(owner=self.owner,filters__manual=True)
+        response=self.client.get('/workspace/drafts/')
+        self.assertEqual(response.status_code,200)
+        self.assertEqual([item.lot_id for item in response.context['items']],[lot.pk])
+        tabs=BeautifulSoup(response.content,'html.parser').select('.collection-tabs a')
+        self.assertEqual([tab.get_text(' ',strip=True) for tab in tabs],['Общая подборка'])
+        self.assertNotContains(response,'Пока нет подборок')
+        self.assertNotContains(response,manual.name)
+        self.assertEqual(next(step['count'] for step in response.context['steps'] if step['key']=='preparing'),1)
+        self.assertEqual(list(self.client.get('/search/').context['profiles']),[])
+        self.assertEqual(self.client.get('/main/').context['profiles'],0)
+        self.assertTrue(CollectionLot.objects.filter(profile=manual,lot=lot).exists())
+        self.client.force_login(self.other)
+        self.assertNotContains(self.client.get('/workspace/drafts/'),lot.name)
+        self.assertEqual(self.client.get('/workspace/',{'profile':manual.pk}).status_code,404)
+
+    def test_manual_links_open_aggregate_without_losing_stage_or_sort(self):
+        from .workflow_state import manual_profile
+        manual=manual_profile(self.owner.pk)
+        for path in ['/workspace/','/workspace/drafts/']:
+            response=self.client.get(path,{'profile':manual.pk,'stage':'payment','sort':'-amount','per_page':'50'})
+            self.assertRedirects(response,path+'?profile=all&stage=payment&sort=-amount&per_page=50',fetch_redirect_response=False)
+        response=self.client.get('/workspace/')
+        tabs=BeautifulSoup(response.content,'html.parser').select('.collection-tabs a')
+        self.assertEqual([tab.get_text(' ',strip=True) for tab in tabs],['Общая подборка','Накопители'])
+        self.assertEqual(list(self.client.get('/search/').context['profiles']),[self.profile])
+
     def test_refresh_uses_local_filter_without_telegram_and_preserves_workflow(self):
         with patch('tender_search.client.ZakupClient.search', side_effect=AssertionError('No network')):
             self.run_refresh()
@@ -57,7 +89,7 @@ class CollectionsTests(TestCase):
         work = CollectionLot.objects.get(lot__source_id=1)
         work.stage='payment'; work.save()
         starred = CollectionLot.objects.get(lot__source_id=2)
-        starred.stage='interesting';starred.save()
+        starred.stage='preparing';starred.save()
         Favorite.objects.get_or_create(owner=self.owner, lot=starred.lot)[0]
         IndexedLot.objects.update(current=False)
         self.run_refresh()
@@ -66,8 +98,8 @@ class CollectionsTests(TestCase):
         self.assertEqual(response.context['page'].paginator.count, 0)
         payment = self.client.get('/workspace/', {'profile':self.profile.pk, 'stage':'payment'})
         self.assertEqual([item.lot.source_id for item in payment.context['page']], [1])
-        interesting = self.client.get('/workspace/', {'profile':self.profile.pk, 'stage':'interesting'})
-        self.assertEqual([item.lot.source_id for item in interesting.context['page']], [2])
+        interesting = self.client.get('/workspace/', {'profile':self.profile.pk, 'stage':'preparing'}, follow=True)
+        self.assertEqual([item.lot.source_id for item in interesting.context['items']], [2])
 
     def test_partial_refresh_adds_new_matches_without_erasing_old_membership(self):
         self.run_refresh()
@@ -133,7 +165,7 @@ class CollectionsTests(TestCase):
         item=CollectionLot.objects.get()
         Favorite.objects.get_or_create(owner=self.owner,lot=item.lot)[0]
         set_watch(owner=self.owner,lot=item.lot,announcement=item.lot.announcement,enabled=True)
-        response=self.client.get('/workspace/',{'profile':self.profile.pk,'stage':'interesting'})
+        response=self.client.get('/workspace/',{'profile':self.profile.pk,'stage':'preparing'},follow=True)
         soup=BeautifulSoup(response.content,'html.parser')
         self.assertEqual(len(soup.select('.collection-tab')),3)
         self.assertEqual(len(soup.select('.funnel-step')),12)
@@ -158,8 +190,8 @@ class CollectionsTests(TestCase):
         item.refresh_from_db();independent.refresh_from_db()
         self.assertEqual((item.stage,item.outcome),('new',''))
         self.assertEqual(independent.stage,'new')
-        self.client.post(endpoint,{'stage':'interesting','outcome':'won'})
-        item.refresh_from_db();self.assertEqual((item.stage,item.outcome),('interesting',''))
+        self.client.post(endpoint,{'stage':'preparing','outcome':'won'})
+        item.refresh_from_db();self.assertEqual((item.stage,item.outcome),('preparing',''))
         self.client.post(endpoint,{'stage':'hacked','outcome':'lost'})
         item.refresh_from_db();self.assertEqual(item.outcome,'')
 
@@ -226,8 +258,8 @@ class CollectionsTests(TestCase):
         self.run_refresh(); item=CollectionLot.objects.get()
         item.stage='delivery';item.save()
         url=f'/lots/{item.lot_id}/note/'
-        response=self.client.post(url,{'note':'Доставить утром','return_to':'/workspace/?stage=interesting'})
-        self.assertIn('stage=interesting',response.url)
+        response=self.client.post(url,{'note':'Доставить утром','return_to':'/workspace/?stage=preparing'})
+        self.assertIn('stage=preparing',response.url)
         self.client.post(url,{'stage':'payment','outcome':'lost','note':'x'*10001})
         item.refresh_from_db()
         self.assertEqual(item.stage,'delivery')
@@ -255,7 +287,7 @@ class CollectionsTests(TestCase):
                     if url.startswith('/workspace/'):
                         item.refresh_from_db()
                         url += '&stage=' + ('all' if item.stage == 'new' else item.stage)
-                    response = self.client.get(url)
+                    response = self.client.get(url, follow=True)
                     self.assertEqual(response.status_code, 200)
                     actions = BeautifulSoup(response.content, 'html.parser').select_one(f'.lot-actions[data-lot-id="{lot.pk}"]')
                     self.assertIsNotNone(actions)
@@ -407,9 +439,9 @@ class CollectionsTests(TestCase):
     def test_stage_picker_and_inline_notes_hidden_all_stages_and_sort_links_work(self):
         self.run_refresh();item=CollectionLot.objects.get()
         for scope in ('all',str(self.profile.pk)):
-            for stage in ('new','interesting','applied','won','lost','not_participated','contract','delivery','payment'):
+            for stage in ('new','preparing','applied','won','lost','not_participated','contract','delivery','payment'):
                 item.stage=stage;item.outcome=stage if stage in ('won','lost') else '';item.save()
-                response=self.client.get('/workspace/',{'profile':scope,'stage':'all' if stage=='new' else stage})
+                response=self.client.get('/workspace/',{'profile':scope,'stage':'all' if stage=='new' else stage},follow=True)
                 soup=BeautifulSoup(response.content,'html.parser')
                 self.assertFalse(soup.select('.collection-stage-form, .collection-note-form'))
                 self.assertNotContains(response,'<th>Этап работы</th>',html=True)
@@ -417,6 +449,6 @@ class CollectionsTests(TestCase):
                 self.assertEqual(len(links),3)
                 for link in links:
                     self.assertNotIn('hx-target',link.attrs)
-                    self.assertEqual(self.client.get('/workspace/'+link['href']).status_code,200)
+                    self.assertEqual(self.client.get('/workspace/'+link['href'],follow=True).status_code,200)
         response=self.client.post(f'/lots/{item.lot_id}/note/',{'note':'Личная','return_to':'https://evil.example/workspace/'})
         self.assertEqual(response.url,f'/lots/{item.lot_id}/')

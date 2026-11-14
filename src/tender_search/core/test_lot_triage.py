@@ -22,9 +22,9 @@ class LotTriageTests(TestCase):
         self.assertNotContains(self.client.get(f'/lots/{self.lot.pk}/'),'id="lot-triage-actions"')
 
     def test_interesting_returns_to_same_list_and_syncs_favorite(self):
-        response=self.client.post(self.url,{'stage':'interesting','return_to':self.back})
+        response=self.client.post(self.url,{'stage':'preparing','return_to':self.back})
         self.assertEqual(response.url,self.back)
-        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'interesting')
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
         self.assertTrue(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
 
     def test_uninteresting_stops_personal_tracking_and_redirect_is_safe(self):

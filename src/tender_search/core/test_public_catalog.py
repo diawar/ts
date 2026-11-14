@@ -36,7 +36,7 @@ class PublicCatalogTests(TestCase):
         lot = self.make_lot()
         catalog = self.get_public('/catalog/')
         self.assertContains(catalog, '/catalog/lots/1/')
-        self.assertContains(catalog, '14 дней бесплатно')
+        self.assertContains(catalog, 'href="/register/"')
         self.assertContains(catalog, 'Встроенная CRM')
         self.assertNotIn('X-Robots-Tag', catalog)
         response = self.get_public('/catalog/lots/1/?utm_source=test')

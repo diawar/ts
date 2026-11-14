@@ -5,7 +5,7 @@
 {% if lot.workflow_actions or lot.contract_watch or lot.is_archived %}<section class="panel"><h2>{{ lot.workflow.get_stage_display }}</h2>{% include 'core/_fulfillment_actions.html' %}</section>{% endif %}
 <div id="lot-price-region">{% if saved_price and not price_editable %}{% include 'core/_lot_price.html' %}{% endif %}</div>
 {% include 'core/_lot_specification.html' %}
-{% if lot.workflow.stage == 'interesting' %}<section class="panel lot-triage-actions"><form method="post" action="{% url 'draft_queue_add' %}">{% csrf_token %}<input type="hidden" name="lots" value="{{ lot.pk }}"><button class="button triage-primary" type="submit">В подготовку заявки</button></form></section>{% endif %}
+
 {% if untriaged_item %}{% include 'core/_lot_triage_actions.html' %}{% endif %}
 {% include 'core/_lot_note.html' %}
 {% include 'core/_shipment.html' %}

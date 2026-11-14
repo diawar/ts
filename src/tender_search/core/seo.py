@@ -16,7 +16,7 @@ CATALOG_PAGES = {'catalog', 'catalog_category', 'catalog_region', 'catalog_lot'}
 PUBLIC_PAGES = {'landing', 'guides', 'guide'} | CATALOG_PAGES
 TITLE = 'Поиск тендеров в Казахстане и CRM — TenderSearch'
 DESCRIPTION = ('Тендеры и госзакупки Казахстана: поиск по лотам и техспецификациям, '
-               'личные подборки по ключевым словам, Telegram и встроенная CRM. 14 дней бесплатно.')
+               'личные подборки по ключевым словам, Telegram и встроенная CRM.')
 GUIDES_TITLE = 'Статьи о тендерах и госзакупках Казахстана — TenderSearch'
 GUIDES_DESCRIPTION = ('Практические статьи для поставщиков: перечень изъятий, ЗЦП, поиск тендеров, '
                       'ключевые слова, техспецификации, расчёт цены и CRM для закупок.')
@@ -39,7 +39,7 @@ def metadata(request):
     article = GUIDE_BY_SLUG.get(match.kwargs.get('slug')) if name == 'guide' else None
     title, description = {
         'login': ('Вход — TenderSearch', 'Войдите в TenderSearch: ваши подборки тендеров и CRM для закупок.'),
-        'register': ('Регистрация — TenderSearch', 'Создайте аккаунт TenderSearch: поиск тендеров и встроенная CRM. 14 дней бесплатно.'),
+        'register': ('Регистрация — TenderSearch', 'Создайте аккаунт TenderSearch: поиск тендеров и встроенная CRM.'),
         'account_access': ('Срок доступа — TenderSearch', 'Управление доступом к TenderSearch.'),
         'guides': (GUIDES_TITLE, GUIDES_DESCRIPTION),
     }.get(name, (TITLE, DESCRIPTION))

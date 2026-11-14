@@ -11,6 +11,8 @@ from .models import AnnouncementWatch, StatusDelivery, TelegramSubscription, Fav
 from .telegram_service import ALMATY, in_work_hours, telegram_api, TelegramError
 from .source import RedisGate, source_client
 
+STATUS_CHECK_INTERVAL = timedelta(minutes=15)
+
 
 def cancel_watch(owner_id, announcement_id):
     with transaction.atomic():
@@ -46,10 +48,11 @@ def schedule_status_checks():
     from .tasks import check_announcement_status
     now=timezone.now()
     owners=TelegramSubscription.objects.filter(enabled=True,chat_id__isnull=False).values('owner_id')
-    candidates=AnnouncementWatch.objects.filter(enabled=True,owner_id__in=owners).filter(owner_id__in=eligible_user_ids()).filter(Q(next_check_at__isnull=True)|Q(next_check_at__lte=now)).filter(Q(lease_until__isnull=True)|Q(lease_until__lt=now))
-    for watch in candidates[:100]:
+    due = Q(next_check_at__isnull=True)|Q(next_check_at__lte=now)|Q(error='',checked_at__lte=now-STATUS_CHECK_INTERVAL)
+    candidates=AnnouncementWatch.objects.filter(enabled=True,owner_id__in=owners).filter(owner_id__in=eligible_user_ids()).filter(due).filter(Q(lease_until__isnull=True)|Q(lease_until__lt=now))
+    for watch in candidates.order_by('next_check_at','pk')[:100]:
         token=secrets.token_hex(16)
-        claimed=AnnouncementWatch.objects.filter(pk=watch.pk,enabled=True).filter(Q(lease_until__isnull=True)|Q(lease_until__lt=now)).update(lease=token,lease_until=now+timedelta(minutes=5))
+        claimed=candidates.filter(pk=watch.pk).update(lease=token,lease_until=now+timedelta(minutes=5))
         if claimed:
             try: check_announcement_status.delay(watch.pk,token)
             except Exception:
@@ -76,15 +79,15 @@ def check_status(watch_id, lease):
             current.last_status,current.last_status_name=identity,name
             if changed:current.revision+=1
             current.checked_at=timezone.now()
-            tomorrow=current.checked_at.astimezone(ALMATY)+timedelta(days=1)
-            current.next_check_at=tomorrow.replace(hour=7,minute=0,second=0,microsecond=0)
+            current.next_check_at=current.checked_at+STATUS_CHECK_INTERVAL
             current.error='';current.save()
             Announcement.objects.filter(pk=current.announcement_id).update(status=name,raw=card,checked_at=timezone.now())
             if changed:
+                StatusDelivery.objects.filter(watch=current,state='pending').update(state='cancelled')
                 key=f'{current.pk}:{current.generation}:{current.revision}'
-                StatusDelivery.objects.get_or_create(event_key=key,defaults={'watch':current,'generation':current.generation,'payload':status_payload(current,old_name)})
+                StatusDelivery.objects.get_or_create(event_key=key,defaults={'watch':current,'generation':current.generation,'revision':current.revision,'payload':status_payload(current,old_name)})
     except Exception as exc:
-        AnnouncementWatch.objects.filter(pk=watch_id,lease=lease).update(error=str(exc)[:200] if isinstance(exc,SourceError) else 'Не удалось проверить статус. Повторим позже.',next_check_at=timezone.now()+timedelta(hours=1))
+        AnnouncementWatch.objects.filter(pk=watch_id,lease=lease).update(error=str(exc)[:200] if isinstance(exc,SourceError) else 'Не удалось проверить статус. Повторим позже.',next_check_at=timezone.now()+timedelta(minutes=5))
     finally:
         AnnouncementWatch.objects.filter(pk=watch_id,lease=lease).update(lease='',lease_until=None)
 
@@ -95,15 +98,20 @@ def deliver_status_notifications():
     StatusDelivery.objects.filter(state='sending',updated_at__lt=now-timedelta(minutes=5)).update(state='uncertain',error='Доставка не подтверждена; повтор отключён.')
     deliveries=StatusDelivery.objects.filter(state='pending',watch__owner_id__in=eligible_user_ids()).filter(Q(retry_at__isnull=True)|Q(retry_at__lte=now)).select_related('watch')
     for delivery in deliveries[:20]:
-        watch=delivery.watch
-        if (delivery.event_key.endswith((':start',':stop')) or delivery.generation!=watch.generation or
-                not watch.enabled or not Favorite.objects.filter(owner_id=watch.owner_id,lot_id=watch.lot_id).exists()):
-            StatusDelivery.objects.filter(pk=delivery.pk).update(state='cancelled');continue
-        sub=TelegramSubscription.objects.filter(owner_id=watch.owner_id,enabled=True,chat_id__isnull=False).first()
-        if not sub:
-            StatusDelivery.objects.filter(pk=delivery.pk,state='pending').update(state='cancelled')
-            continue
-        if not StatusDelivery.objects.filter(pk=delivery.pk,state='pending').update(state='sending',updated_at=timezone.now()):continue
+        with transaction.atomic():
+            watch=AnnouncementWatch.objects.select_for_update().get(pk=delivery.watch_id)
+            current=StatusDelivery.objects.select_for_update().filter(pk=delivery.pk,state='pending').first()
+            if not current:continue
+            if (current.event_key.endswith((':start',':stop')) or current.generation!=watch.generation or current.revision!=watch.revision or
+                    not watch.enabled or not Favorite.objects.filter(owner_id=watch.owner_id,lot_id=watch.lot_id).exists()):
+                StatusDelivery.objects.filter(pk=current.pk).update(state='cancelled');continue
+            # A committed in-flight send must finish before the next event for
+            # this watch. Never hold a transaction open during the HTTP call.
+            if StatusDelivery.objects.filter(watch=watch,state='sending').exists():continue
+            sub=TelegramSubscription.objects.filter(owner_id=watch.owner_id,enabled=True,chat_id__isnull=False).first()
+            if not sub:
+                StatusDelivery.objects.filter(pk=current.pk).update(state='cancelled');continue
+            StatusDelivery.objects.filter(pk=current.pk).update(state='sending',updated_at=timezone.now())
         try:
             result=telegram_api('sendMessage',dict(delivery.payload,chat_id=sub.chat_id))
             StatusDelivery.objects.filter(pk=delivery.pk).update(state='sent',message_id=result['message_id'],error='')

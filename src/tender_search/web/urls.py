@@ -28,6 +28,7 @@ urlpatterns = [
     path('workspace/drafts/<int:item_id>/restart/', draft_queue.restart, name='draft_queue_restart'),
     path('workspace/drafts/<int:item_id>/check/', draft_queue.check_portal, name='draft_queue_check'),
     path('workspace/drafts/<int:item_id>/packet/', draft_queue.packet, name='draft_queue_packet'),
+    path('workspace/drafts/<int:item_id>/guard/', draft_queue.launch_guard, name='draft_queue_guard'),
     path('workspace/drafts/<int:item_id>/progress/', draft_queue.progress, name='draft_queue_progress'),
     path('workspace/drafts/<int:item_id>/cancel/', draft_queue.cancel, name='draft_queue_cancel'),
     path('settings/extension/report/', receive_extension_report, name='receive_extension_report'),

@@ -2,11 +2,12 @@
 from pathlib import Path
 import re
 import time
+import os
 
 import httpx
 
 
-url = (Path(__file__).resolve().parents[1] / "data/tunnel-url.txt").read_text(encoding="ascii").strip()
+url = os.environ.get('TUNNEL_URL') or (Path(__file__).resolve().parents[1] / "data/tunnel-url.txt").read_text(encoding="ascii").strip()
 if not re.fullmatch(r"https://[a-z0-9-]+\.trycloudflare\.com", url):
     raise ValueError("Unexpected tunnel hostname")
 with httpx.Client(base_url=url, timeout=20, follow_redirects=False, trust_env=False) as client:
@@ -21,9 +22,14 @@ with httpx.Client(base_url=url, timeout=20, follow_redirects=False, trust_env=Fa
         time.sleep(2)
     else:
         raise AssertionError("Public login is unavailable")
-    assert "<h1>Вход</h1>" in login.text
-    for path in ("/", "/search/"):
-        assert client.get(path).status_code == 302, path
+    assert 'id="id_username"' in login.text and 'type="password"' in login.text
+    home = client.get('/')
+    assert home.status_code == 200
+    assert 'href="/login/"' in home.text and 'href="/register/"' in home.text
+    assert 'В приложение' not in home.text
+    for path in ('/main/', '/search/', '/workspace/', '/settings/', '/administration/'):
+        response = client.get(path)
+        assert response.status_code == 302 and response.headers['location'].startswith('/login/'), path
     assert client.get("/admin/").status_code == 403
     assert client.get("/admin/auth/user/").status_code == 403
     csrf = re.search(r'name="csrfmiddlewaretoken" value="([^\"]+)"', login.text).group(1)
@@ -33,6 +39,6 @@ with httpx.Client(base_url=url, timeout=20, follow_redirects=False, trust_env=Fa
     assert response.status_code == 200 and "Не удалось войти" in response.text
     assert client.post("/login/", data=data, headers={"Origin": "https://untrusted.example"}).status_code == 403
 with httpx.Client(timeout=10, trust_env=False) as client:
-    assert client.get("http://127.0.0.1:8000/login/").status_code == 200
+    assert client.get(os.environ.get('LOCAL_APP_URL', 'http://127.0.0.1:8001')+'/login/').status_code == 200
 print("HTTPS tunnel OK: protected routes, secure cookie, CSRF origin checks; localhost unchanged")
 print(url)

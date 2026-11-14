@@ -173,7 +173,7 @@ def scan_profile(profile_id, lease):
             if current.monitor_lease != lease or current.filters != profile.filters or not current.enabled: return
             baseline = current.index_baseline_at is None if settings.USE_LOCAL_INDEX else current.baseline_at is None
             from .models import UserLotWorkflow
-            archived_lots = set(UserLotWorkflow.objects.filter(owner=current.owner,stage__in=('archived','not_participated')).values_list('lot_id',flat=True))
+            archived_lots = set(UserLotWorkflow.objects.filter(owner=current.owner,stage__in=('archived','not_participated','closed')).values_list('lot_id',flat=True))
             for hit in job.hits.select_related('lot__announcement','lot__customer').iterator():
                 lot = hit.lot
                 if lot.pk in archived_lots:
@@ -202,10 +202,24 @@ def scan_profile(profile_id, lease):
 
 def message_for(delivery):
     from .deadlines import telegram_remaining_time
+    from .lot_pricing import attach_lot_budgets, lot_budget_display
+    from .templatetags.search_tags import short_measure
     lot, profile = delivery.lot, delivery.profile
     esc = lambda text, length: escape(str(text or '')[:length])
     deadline = lot.announcement.deadline.astimezone(ALMATY).strftime('%d.%m.%Y %H:%M') if lot.announcement.deadline else 'Уточните на портале'
     amount = f'{lot.amount:,.2f}'.replace(',',' ')+' ₸' if lot.amount is not None else 'Не указана'
+    if not hasattr(lot,'_budget_display'):attach_lot_budgets([lot])
+    budget=lot_budget_display(lot)
+    quantity='По позициям' if budget.get('multiple') else 'Не уточнено'
+    unit='По позициям' if budget.get('multiple') else 'Не уточнена'
+    if budget.get('quantity') is not None:
+        count=format(budget['quantity'],'f')
+        if '.' in count:count=count.rstrip('0').rstrip('.')
+        quantity=(count.replace('.',',')+' '+short_measure(budget.get('measure',''))).strip()
+    if budget.get('unit') is not None:
+        unit=f"{budget['unit']:,.2f}".replace(',',' ').replace('.',',')+' ₸'
+        if budget.get('net'):unit+=' без НДС'
+    budget_lines=f'Количество: <b>{esc(quantity,120)}</b>\nЦена за единицу: <b>{esc(unit,120)}</b>\n'
     from tender_search.matching import match_lot
     specification = profile.filters.get('specification', {})
     matched = match_lot(lot.name, lot.description, specification) if specification.get('terms') else []
@@ -214,7 +228,7 @@ def message_for(delivery):
             f'📦 Лот: <code>{esc(lot.number or "Не указан",100)}</code>\n'
             f'Объявление: <code>{esc(lot.announcement.number or "Не указано",100)}</code>\n\n'
             f'<b>{esc(lot.announcement.name or lot.name,700)}</b>\n\n'
-            f'📦 Лот: {esc(lot.name,500)}\n💰 Сумма лота: <b>{esc(amount,100)}</b>\n'
+            f'📦 Лот: {esc(lot.name,500)}\n{budget_lines}💰 Сумма лота: <b>{esc(amount,100)}</b>\n'
             f'🏢 {esc(lot.customer.name if lot.customer else "Заказчик не указан",350)}\n'
             f'⏳ Приём до: <b>{deadline}</b> (Алматы)\n'
             f'{telegram_remaining_time(lot.announcement.deadline)}'
@@ -223,7 +237,7 @@ def message_for(delivery):
     buttons=[[{'text':('Открыть на госзакупе ↗' if lot.announcement.source == 'zakup' else f'Открыть на {lot.portal_label} ↗'),'url':url}]]
     from .telegram_actions import callback_data
     action=callback_data(delivery)
-    if action:buttons.insert(0,[{'text':'⭐ В интересные','callback_data':action}])
+    if action:buttons.insert(0,[{'text':'⭐ В работу','callback_data':action}])
     return {'text':body,'parse_mode':'HTML','link_preview_options':{'is_disabled':True},'reply_markup':{'inline_keyboard':buttons}}
 
 def deliver_pending():
@@ -232,13 +246,16 @@ def deliver_pending():
     # A process interruption after claiming can mean Telegram accepted a message. Never resend blindly.
     TelegramDelivery.objects.filter(state='sending',updated_at__lt=now-timedelta(minutes=5)).update(state='uncertain',error='Не удалось подтвердить доставку; автоматический повтор отключён.')
     deliveries=TelegramDelivery.objects.filter(state='pending',profile__enabled=True,owner_id__in=eligible_user_ids()).filter(Q(retry_at__isnull=True)|Q(retry_at__lte=now)).select_related('lot__announcement','lot__customer','profile')
-    for delivery in deliveries[:20]:
+    batch=list(deliveries[:20])
+    from .lot_pricing import attach_lot_budgets
+    attach_lot_budgets([delivery.lot for delivery in batch])
+    for delivery in batch:
         if not in_work_hours(): return
         from .models import UserLotWorkflow
         raw_status=(delivery.lot.raw or {}).get('status') or {}
         status_id=raw_status.get('id') if isinstance(raw_status,dict) else raw_status
         status_id=status_id or (delivery.lot.raw or {}).get('status_id')
-        if (UserLotWorkflow.objects.filter(owner_id=delivery.owner_id,lot_id=delivery.lot_id,stage__in=('archived','not_participated')).exists()
+        if (UserLotWorkflow.objects.filter(owner_id=delivery.owner_id,lot_id=delivery.lot_id,stage__in=('archived','not_participated','closed')).exists()
                 or (delivery.lot.announcement.deadline and delivery.lot.announcement.deadline<=timezone.now())
                 or (status_id and str(status_id) not in ('6','7','9'))):
             TelegramDelivery.objects.filter(pk=delivery.pk,state='pending').update(state='cancelled')

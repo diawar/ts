@@ -5,7 +5,7 @@ from .company_choices import TAXPAYER_TYPES
 
 
 def readiness(item,company,preparation=None):
-    busy=item.state in ('running','waiting')
+    busy=item.state in ('launching','running','waiting')
     reason=''
     if not company or not company.company_bin:
         reason='Укажите БИН и реквизиты организации в настройках.'
@@ -27,7 +27,7 @@ def readiness(item,company,preparation=None):
     elif busy:
         reason='Сначала остановите заполнение и дождитесь подтверждения остановки.'
     elif item.state in ('complete','cancelled'):
-        reason='Черновик уже готов.' if item.state=='complete' else 'Лот убран из подготовки.'
+        reason='Черновик уже готов.' if item.state=='complete' else 'Лот убран из очереди. Данные сохранены.'
     launch_ready=valid_data and not (item.lot.announcement.deadline and item.lot.announcement.deadline<=timezone.now()) and not (getattr(item.lot,'workflow',None) and item.lot.workflow.stage!='preparing')
     return {'launch_ready':bool(launch_ready),'input_ready':valid_data,'can_start':not reason,'can_edit':not busy,
         'can_remove':not busy,'reason':reason,

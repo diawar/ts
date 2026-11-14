@@ -15,21 +15,22 @@ async function clearJob(expected){
   try{await chrome.action?.setBadgeText({text:''});}catch{}
  });
 }
-async function sourceIdentity(tabId,origin){
+async function sourceIdentity(tabId,origin,queueContext=null,active=false){
  if(!Number.isInteger(tabId)||!globalThis.GOSZAKUP_APP_ORIGINS?.includes(origin))throw Error('Передайте подготовку заново из приложения.');
  let timer,identity;
- try{identity=await Promise.race([chrome.tabs.sendMessage(tabId,{type:'bridge:identity'}),
+ try{identity=await Promise.race([chrome.tabs.sendMessage(tabId,{type:'bridge:identity',queue_context:queueContext,queue_active:active}),
   new Promise((resolve,reject)=>{timer=setTimeout(()=>reject(Error('Вкладка приложения не отвечает.')),8000);})]);}
  finally{clearTimeout(timer);}
  if(identity?.origin!==origin||(!/^\/lots\/\d+\/preparation\/$/.test(identity?.pathname||'')&&identity?.pathname!=='/workspace/drafts/'))throw Error('Откройте исходную вкладку подготовки приложения.');
  if(identity?.error||!/^\d+$/.test(identity?.user_id||''))throw Error(identity?.error||'Не удалось подтвердить аккаунт приложения.');
+ if(queueContext&&identity.queue_allowed!==true)throw Error('Запуск очереди больше не подтверждён.');
  return {appOrigin:origin,appTabId:tabId,appUserId:identity.user_id};
 }
-async function guardJob(job){
+async function guardJob(job,active=false){
  if(!job)return null;
  try{
   if(!job.jobId||!job.appUserId)throw Error('Старая подготовка не привязана к аккаунту.');
-  const current=await sourceIdentity(job.appTabId,job.appOrigin);
+  const current=await sourceIdentity(job.appTabId,job.appOrigin,job.queue_context,active);
   if(current.appUserId!==job.appUserId)throw Error('Аккаунт приложения изменился.');
   if((await readJob())?.jobId!==job.jobId)throw Error('Подготовка уже изменилась.');
   return job;
@@ -97,7 +98,7 @@ async function resumeRecovery(){
 }
 chrome.alarms.onAlarm.addListener(alarm=>{if(alarm.name===retryAlarm)void resumeRecovery();});
 async function injected(job,action){
- await guardJob(job);
+ await guardJob(job,true);
  const rows=await chrome.scripting.executeScript({target:{tabId:job.tabId},func:runDraftStep,
   args:[job.packet,action,{applicationNumber:job.number||'',lotConfirmed:job.lotConfirmed===true}]});
  if(rows.length!==1||!rows[0].result)throw Error('Ответ страницы не получен. Проверьте черновик на портале.');
@@ -280,10 +281,11 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
    const previous=await readJob();if(previous){try{await guardJob(previous);}catch{}}
    if(running||transferring||['running','waiting'].includes((await readJob())?.status))throw Error('Сначала остановите заполнение очереди.');
    transferring=true;
-   try{
-    const t=message.target;
+    let checkTab;
+    try{
+     const t=message.target;
     if(!t||!/^\d{12}$/.test(t.company_bin)||!/^\d{6,}-\d+$/.test(t.announcement_number)||!/^\d+-[А-Яа-яA-Za-z0-9]+$/.test(t.lot_number)||!/^\d{1,30}$/.test(t.number))throw Error('Некорректные данные проверки.');
-    const tab=await chrome.tabs.create({url:'https://zakup.gov.kz/cabinet/purchase/my-applications'});
+    const tab=checkTab=await chrome.tabs.create({url:'https://zakup.gov.kz/cabinet/purchase/my-applications',active:false});
     await new Promise((resolve,reject)=>{
      const done=error=>{clearTimeout(timer);chrome.tabs.onUpdated.removeListener(listener);error?reject(error):resolve();};
      const listener=(id,change)=>{if(id===tab.id&&change.status==='complete')done();};
@@ -294,8 +296,11 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
     const current=await senderIdentity(message,sender);
     if(current.appUserId!==binding.appUserId)throw Error('Аккаунт изменился. Откройте очередь заново.');
     if(results.length!==1||!results[0].result)throw Error('Ответ проверки не получен.');
-    return {result:results[0].result};
-   }finally{transferring=false;}
+     return {result:results[0].result};
+    }finally{
+     if(checkTab?.id!==undefined){try{await chrome.tabs.remove(checkTab.id);}catch{}}
+     transferring=false;
+    }
   })().then(respond,error=>respond({error:error.message}));return true;
  }
  if(message?.type==='bridge:queue-stop'){
@@ -304,16 +309,16 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
    const binding=await senderIdentity(message,sender);
    if(job)await guardJob(job);
    if(job&&job.appUserId!==binding.appUserId)throw Error('Очередь другого аккаунта.');
-   if(job?.appOrigin!==new URL(sender.url).origin)throw Error('Очередь другого приложения.');
-   return command({type:'draft:stop'});
-  }).then(()=>respond({stopped:true}),error=>respond({error:error.message}));return true;
+   if(job&&job.appOrigin!==new URL(sender.url).origin)throw Error('Очередь другого приложения.');
+   await command({type:'draft:stop'});
+  }).then(()=>respond({stopped:true,idle:!running&&!transferring}),error=>respond({error:error.message}));return true;
  }
  if(message?.type==='bridge:queue-status'){
   if(!trustedPreparationSender(sender)||new URL(sender.url).pathname!=='/workspace/drafts/')return false;
   command({type:'draft:get'}).then(async job=>{
    const binding=await senderIdentity(message,sender);
    if(!job?.queue_context||job.appOrigin!==binding.appOrigin||job.appUserId!==binding.appUserId){respond({snapshot:null});return;}
-   respond({queue_context:job.queue_context,snapshot:{status:job.status,number:job.number||'',message:job.message||'',
+  respond({queue_context:job.queue_context,snapshot:{status:job.stop&&(running||transferring)?'running':job.status,number:job.number||'',message:job.message||'',
     intent:job.intent||'',phase:job.phase||'',company_bin:job.packet.company_bin,announcement_number:job.packet.announcement_number,lot_number:job.packet.lot_number,
     lotConfirmed:job.lotConfirmed===true,description_saved:job.status==='complete',observed_at:job.observedAt||null}});
   }).catch(error=>respond({error:error.message}));return true;

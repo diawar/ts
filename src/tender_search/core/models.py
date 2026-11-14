@@ -234,8 +234,8 @@ class SearchProfile(Timestamped):
 
 
 class CollectionLot(Timestamped):
-    STAGES = [('new', 'Сохранён в подборку'), ('interesting', 'Интересные лоты'), ('preparing', 'Подготовка заявки'), ('awaiting_results', 'Ожидаем итоги'), ('applied', 'Подали заявку'),
-              ('won', 'Выиграли'), ('lost', 'Проиграли'), ('not_participated', 'Не участвовали'), ('contract', 'Заключение договора'), ('delivery', 'Поставка'), ('payment', 'Оплата'), ('archived', 'Архив')]
+    STAGES = [('new', 'Сохранён в подборку'), ('preparing', 'В работе'), ('awaiting_results', 'Ожидаем итоги'), ('applied', 'Подали заявку'),
+              ('won', 'Выиграли'), ('lost', 'Проиграли'), ('not_participated', 'Не участвовали'), ('closed', 'Закупка закрыта'), ('contract', 'Заключение договора'), ('delivery', 'Поставка'), ('payment', 'Оплата'), ('archived', 'Архив')]
     OUTCOMES = [('', 'Решение не указано'), ('won', 'Выиграли'), ('lost', 'Не выиграли')]
     profile = models.ForeignKey(SearchProfile, on_delete=models.CASCADE, related_name='collection_lots')
     lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
@@ -307,7 +307,7 @@ class DraftQueueItem(Timestamped):
     lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
     generation = models.UUIDField(default=uuid.uuid4, editable=False)
     state = models.CharField(max_length=20, default='queued', choices=[
-        ('queued','Ожидает'),('ready','Передано в расширение'),('running','Заполняется'),
+        ('queued','Ожидает'),('launching','Запуск в расширении'),('ready','Передано в расширение'),('running','Заполняется'),
         ('waiting','Ожидание восстановления'),('paused','Приостановлено'),('blocked','Требует проверки'),('complete','Черновик готов'),('cancelled','Убрано из очереди')])
     message = models.CharField(max_length=500, blank=True)
     progress_phase = models.CharField(max_length=20, blank=True)
@@ -641,6 +641,7 @@ class AnnouncementWatch(Timestamped):
 class StatusDelivery(Timestamped):
     watch = models.ForeignKey(AnnouncementWatch, on_delete=models.CASCADE)
     generation = models.CharField(max_length=64)
+    revision = models.PositiveIntegerField(default=0)
     event_key = models.CharField(max_length=150, unique=True)
     payload = models.JSONField(default=dict)
     state = models.CharField(max_length=20, default="pending")
@@ -676,15 +677,15 @@ class CompanySettings(Timestamped):
     is_vat_payer = models.BooleanField(default=True)
     owner = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     company_bin = models.CharField(max_length=12, blank=True, default="")
-    company_name = models.CharField(max_length=500, blank=True, default="ТОО \"OVERSHOP.KZ\"")
-    address_city = models.CharField(max_length=200, blank=True, default="Павлодар")
-    address_street = models.CharField(max_length=300, blank=True, default="Желтоксан")
-    address_house = models.CharField(max_length=50, blank=True, default="7")
-    address_office = models.CharField(max_length=50, blank=True, default="25Б")
-    legal_address = models.CharField(max_length=1000, blank=True, default="Павлодар, Желтоксан, 7, 25Б")
-    bank_account = models.CharField(max_length=20, blank=True, default="KZ92601A241008980281")
-    bank_name = models.CharField(max_length=200, blank=True, default="АО \"Народный Банк Казахстана\"")
-    bank_bic = models.CharField(max_length=11, blank=True, default="HSBKKZKX")
+    company_name = models.CharField(max_length=500, blank=True, default="")
+    address_city = models.CharField(max_length=200, blank=True, default="")
+    address_street = models.CharField(max_length=300, blank=True, default="")
+    address_house = models.CharField(max_length=50, blank=True, default="")
+    address_office = models.CharField(max_length=50, blank=True, default="")
+    legal_address = models.CharField(max_length=1000, blank=True, default="")
+    bank_account = models.CharField(max_length=20, blank=True, default="")
+    bank_name = models.CharField(max_length=200, blank=True, default="")
+    bank_bic = models.CharField(max_length=11, blank=True, default="")
     contact_phone = models.CharField(max_length=25, blank=True)
     taxpayer_type = models.CharField(max_length=200, blank=True, default="Юридическое лицо")
 
@@ -763,6 +764,7 @@ class LotSpecification(Timestamped):
     lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
     state = models.CharField(max_length=20, default='queued')
     generation = models.CharField(max_length=64, blank=True)
+    shared_revision = models.CharField(max_length=64, blank=True)
     documents = models.JSONField(default=list)
     error = models.CharField(max_length=300, blank=True)
     class Meta:

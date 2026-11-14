@@ -7,7 +7,7 @@ from django.utils import timezone
 from .models import UserLotWorkflow, CollectionLot, SearchProfile, LotOutcomeWatch, OutcomeDelivery, TelegramDelivery
 from .workflow_state import update_workflow
 
-ARCHIVABLE = ('won', 'lost', 'not_participated')
+ARCHIVABLE = ('won', 'lost', 'not_participated', 'closed')
 
 
 def actions_for(state):

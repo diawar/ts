@@ -80,11 +80,11 @@ def draft_position_count(lot):
 def prepare_application(request, lot_id, price_form=None):
     lot=get_object_or_404(Lot.objects.select_related('announcement'),pk=lot_id)
     workflow=get_object_or_404(UserLotWorkflow,owner=request.user,lot=lot)
-    if workflow.stage not in ('interesting','preparing','awaiting_results','applied','won','lost','contract','delivery','payment','archived'):
+    if workflow.stage not in ('preparing','awaiting_results','applied','won','lost','contract','delivery','payment','archived'):
         raise PermissionDenied
     saved=ApplicationPreparation.objects.filter(owner=request.user,lot=lot).first()
     from .models import DraftQueueItem
-    preparation_busy=DraftQueueItem.objects.filter(owner=request.user,lot=lot,state__in=('running','waiting')).exists()
+    preparation_busy=DraftQueueItem.objects.filter(owner=request.user,lot=lot,state__in=('launching','running','waiting')).exists()
     editable=workflow.stage == 'preparing' and not preparation_busy
     company=CompanySettings.objects.filter(owner=request.user).first()
     company_bin=company.company_bin if company else ''
@@ -106,7 +106,7 @@ def prepare_application(request, lot_id, price_form=None):
                 company=CompanySettings.objects.select_for_update().filter(owner=request.user).first()
                 list(SearchProfile.objects.select_for_update().filter(owner=request.user).order_by('pk'))
                 current=UserLotWorkflow.objects.select_for_update().get(pk=workflow.pk)
-                if DraftQueueItem.objects.filter(owner=request.user,lot=lot,state__in=('running','waiting')).exists():
+                if DraftQueueItem.objects.filter(owner=request.user,lot=lot,state__in=('launching','running','waiting')).exists():
                     raise PermissionDenied('Сначала остановите заполнение в расширении.')
                 if current.stage != 'preparing' or UserLotPrice.objects.select_for_update().filter(owner=request.user,lot=lot,locked_at__isnull=False).exists():
                     raise PermissionDenied
@@ -127,6 +127,14 @@ def prepare_application(request, lot_id, price_form=None):
                         defaults.update(portal_state='unconfirmed',portal_number='',portal_url='',portal_checked_at=None,portal_confirmed_at=None,portal_sync_error='',portal_description_saved_at=None)
                     ApplicationPreparation.objects.update_or_create(owner=request.user,lot=lot,
                         defaults=defaults)
+                    if supports_preparation_export(lot):
+                        item, _ = DraftQueueItem.objects.get_or_create(owner=request.user, lot=lot)
+                        if item.state == 'cancelled':
+                            import uuid
+                            item.state = 'queued'
+                            item.generation = uuid.uuid4()
+                            item.progress_phase = ''; item.message = ''
+                            item.save(update_fields=['state', 'generation', 'progress_phase', 'message', 'updated_at'])
                     messages.success(request,'Подготовка сохранена. Заявка ещё не подана.')
                     return redirect('application_preparation',lot_id=lot.pk)
     if not editable:
@@ -148,7 +156,7 @@ def prepare_application(request, lot_id, price_form=None):
 
 def preparation_export_data(owner, lot_id):
     saved=get_object_or_404(ApplicationPreparation.objects.select_related('lot__announcement'),owner=owner,lot_id=lot_id)
-    get_object_or_404(UserLotWorkflow,owner=owner,lot_id=lot_id,stage__in=('interesting','preparing'))
+    get_object_or_404(UserLotWorkflow,owner=owner,lot_id=lot_id,stage='preparing')
     company=CompanySettings.objects.filter(owner=owner).first()
     return export_saved_preparation(saved,company)
 
@@ -235,14 +243,14 @@ def save_portal_report(owner, lot_id, report, *, allow_create=False):
             saved.portal_sync_error=''
             if report.get('description_saved'):
                 saved.portal_description_saved_at=observed
-            if state=='draft' and report.get('description_saved') and workflow and workflow.stage in ('interesting','preparing'):
+            if state=='draft' and report.get('description_saved') and workflow and workflow.stage in ('preparing'):
                 from .workflow_state import update_workflow
                 from .models import DraftQueueItem
                 update_workflow(owner.pk,lot_id,stage='awaiting_results',result_tracking=False,expired_from_stage='',keep_after_deadline=False)
                 from .fulfillment import pause_outcome
                 pause_outcome(owner.pk,lot_id)
                 DraftQueueItem.objects.filter(owner=owner,lot_id=lot_id).exclude(state='cancelled').update(state='complete',updated_at=timezone.now())
-            if state=='submitted' and workflow and workflow.stage in ('new','interesting','preparing','awaiting_results','not_participated','applied'):
+            if state=='submitted' and workflow and workflow.stage in ('new','preparing','awaiting_results','not_participated','applied'):
                 from .workflow_state import update_workflow
                 from .outcome_service import register_watch
                 from .models import UserLotPrice

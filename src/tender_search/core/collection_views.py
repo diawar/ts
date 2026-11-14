@@ -14,9 +14,9 @@ from .models import SearchProfile, CollectionLot, Favorite, AnnouncementWatch, T
 from .collections_service import enqueue_collection
 from .lot_state import visible_collection_lots
 
-STEPS = [('all', 'Неразобранные лоты'), ('interesting', 'Интересные лоты'), ('preparing', 'Подготовка заявки'), ('awaiting_results', 'Ожидаем итоги'), ('applied', 'Подали заявку'),
+STEPS = [('all', 'Неразобранные лоты'), ('preparing', 'В работе'), ('awaiting_results', 'Ожидаем итоги'), ('applied', 'Подали заявку'),
          ('contract', 'Заключение договора'), ('delivery', 'Поставка'), ('payment', 'Оплата'),
-         ('won', 'Выиграли'), ('lost', 'Проиграли'), ('not_participated', 'Не участвовали'), ('archived', 'Архив')]
+         ('won', 'Выиграли'), ('lost', 'Проиграли'), ('not_participated', 'Не участвовали'), ('closed', 'Закупка закрыта'), ('archived', 'Архив')]
 
 
 @login_required
@@ -29,10 +29,19 @@ def collections(request, preparation_stage=False):
     if not aggregate and not selected.isdecimal():
         raise Http404
     profile = None if aggregate else get_object_or_404(SearchProfile, pk=selected, owner=request.user)
+    if profile and profile.filters.get('manual'):
+        params = request.GET.copy()
+        params['profile'] = 'all'
+        return redirect(request.path + '?' + params.urlencode())
     stage = request.GET.get('stage','preparing') if preparation_stage else request.GET.get('stage', 'all')
+    if stage == 'interesting':
+        params = request.GET.copy()
+        params['stage'] = 'preparing'
+        return redirect(reverse('draft_queue') + '?' + params.urlencode())
     if preparation_stage and stage not in ('preparing','awaiting_results'):stage='preparing'
     if stage in ('preparing','awaiting_results') and not preparation_stage:
-        params={'profile':selected or 'all'}
+        params=request.GET.copy()
+        params['profile']=selected or 'all'
         if stage=='awaiting_results':params['stage']=stage
         return redirect(reverse('draft_queue')+'?'+urlencode(params))
     if stage not in dict(STEPS):
@@ -42,7 +51,9 @@ def collections(request, preparation_stage=False):
     allowed_sorts = {prefix+key for prefix in ('', '-') for key in sort_fields}
     if selected_sort not in allowed_sorts:
         selected_sort = ''
-    context = {**pagination,'collection_sort': selected_sort, 'profiles': profiles, 'active_collection': profile, 'aggregate_collection': aggregate,
+    context = {**pagination,'collection_sort': selected_sort, 'profiles': profiles,
+               'collection_tabs': [saved for saved in profiles if not saved.filters.get('manual')],
+               'active_collection': profile, 'aggregate_collection': aggregate,
                'collection_key': 'all' if aggregate else str(profile.pk), 'stage': stage,
                'stage_choices': CollectionLot.STAGES, 'outcome_choices': CollectionLot.OUTCOMES,
                'telegram_connected': TelegramSubscription.objects.filter(owner=request.user, enabled=True, chat_id__isnull=False).exists()}
@@ -102,11 +113,45 @@ def collections(request, preparation_stage=False):
                     record.terms = list(dict.fromkeys(term for item in record.workflows for term in item.terms))
             context['page'] = page
     if stage in ('preparing','awaiting_results'):
-        from .models import DraftQueueItem
+        from .models import DraftQueueItem, Lot
         from .lot_pricing import attach_lot_budgets
         ids=visible_collection_lots(request.user).filter(stage=stage)
         if profile: ids=ids.filter(profile=profile)
-        items=list(DraftQueueItem.objects.filter(owner=request.user,lot_id__in=ids.values('lot_id')).select_related('lot__announcement','lot__customer').order_by('created_at','pk'))
+        lots = list(Lot.objects.filter(pk__in=ids.values('lot_id')).select_related('announcement', 'customer').order_by('announcement__deadline', 'pk'))
+        queued = {item.lot_id: item for item in DraftQueueItem.objects.filter(owner=request.user, lot_id__in=[lot.pk for lot in lots])}
+        membership_ids = {}
+        for lot_id, record_id in ids.order_by('pk').values_list('lot_id', 'pk'):
+            membership_ids.setdefault(lot_id, record_id)
+        # Selection does not create an executable task. Show unqueued lots too.
+        if selected_sort:
+            sort_key = selected_sort.lstrip('-')
+            field = {'amount': 'amount', 'start': 'offer_start_sort', 'end': 'announcement__deadline'}[sort_key]
+            if sort_key == 'start':
+                lots_query = Lot.objects.filter(pk__in=ids.values('lot_id')).annotate(offer_start_sort=Cast(NullIf(KeyTextTransform('offer_start_date', 'raw'), Value('')), DateTimeField()))
+            else:
+                lots_query = Lot.objects.filter(pk__in=ids.values('lot_id'))
+            ordering = F(field).desc(nulls_last=True) if selected_sort.startswith('-') else F(field).asc(nulls_last=True)
+            lots = list(lots_query.select_related('announcement', 'customer').order_by(ordering, 'pk'))
+        from .lot_state import apply_personal_controls
+        apply_personal_controls(request.user, lots)
+        context['sort_headers'] = {}
+        for name, label in [('amount', 'Сумма, ₸'), ('start', 'Начало'), ('end', 'Окончание')]:
+            active = selected_sort.lstrip('-') == name
+            descending = selected_sort.startswith('-')
+            target = ('-' if active and not descending else '') + name
+            context['sort_headers'][name] = {'label': label, 'url': '?' + urlencode({'profile': context['collection_key'], 'stage': stage, 'sort': target, 'per_page': pagination['per_page']}),
+                'arrow': ('↓' if descending else '↑') if active else '↕', 'aria': ('descending' if descending else 'ascending') if active else 'none'}
+        items = []
+        from tender_search.client import utc_datetime, SchemaError
+        for lot in lots:
+            item = queued.get(lot.pk) or DraftQueueItem(owner=request.user, lot=lot)
+            item.lot = lot
+            try:
+                item.offer_start = utc_datetime((lot.raw or {}).get('offer_start_date'))
+            except (ValueError, TypeError, SchemaError):
+                item.offer_start = None
+            item.collection_item_id = membership_ids[lot.pk]
+            items.append(item)
         attach_lot_budgets([item.lot for item in items])
         from .draft_readiness import readiness
         from .models import CompanySettings, ApplicationPreparation, UserLotWorkflow
@@ -119,7 +164,7 @@ def collections(request, preparation_stage=False):
             item.lot.preparation=saved if saved and company and saved.company_bin==company.company_bin else None
             item.lot.workflow=workflows.get(item.lot_id)
             item.availability=readiness(item,company,saved)
-        context['queue_can_run']=any(item.availability['can_start'] for item in items)
+        context['queue_can_run']=any(item.pk and item.availability['can_start'] for item in items)
         context['items']=items
     return render(request, 'core/collections.html', context)
 
@@ -178,16 +223,18 @@ def move(request, item_id):
         list(SearchProfile.objects.select_for_update().filter(owner=request.user).order_by('pk'))
         item=get_object_or_404(CollectionLot.objects.select_for_update(),pk=item_id)
         from .workflow_state import update_workflow
-        if request.POST.get('stage')=='interesting' and item.stage in ('new', 'not_participated'):
+        target_stage = request.POST.get('stage')
+        if target_stage in ('interesting', 'preparing') and item.stage in ('new', 'not_participated'):
             destination = 'not_participated' if item.stage == 'not_participated' else 'all'
             deadline = item.lot.announcement.deadline
-            update_workflow(request.user.pk, item.lot_id, stage='interesting', outcome='',
+            update_workflow(request.user.pk, item.lot_id, stage='preparing', outcome='',
                 result_tracking=False, expired_from_stage='',
                 keep_after_deadline=bool(deadline and deadline <= timezone.now()))
-        elif request.POST.get('stage') == 'not_participated' and item.stage in ('new', 'interesting'):
-            destination = 'interesting' if item.stage == 'interesting' else 'all'
-            update_workflow(request.user.pk, item.lot_id, stage='not_participated', outcome='',
-                result_tracking=False, expired_from_stage='', keep_after_deadline=False)
+        elif target_stage == 'not_participated' and item.stage in ('new', 'preparing'):
+            from .workflow_state import remove_from_work
+            destination = 'preparing' if item.stage == 'preparing' else 'all'
+            if not remove_from_work(request.user.pk, item.lot_id):
+                messages.error(request, 'Сначала остановите заполнение черновика и дождитесь подтверждения остановки.')
         else:
             messages.error(request,'Этап меняется автоматически по подтверждённым данным. Для подготовки используйте «Подготовить заявку».')
             destination='all'

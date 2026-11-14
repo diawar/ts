@@ -5,7 +5,7 @@ from uuid import UUID
 from django.db import transaction
 from django.utils import timezone
 from .models import TelegramSubscription,TelegramDelivery,SearchProfile,UserLotWorkflow
-from .workflow_state import add_to_interesting,LOCKED_STAGES
+from .workflow_state import add_to_participation,LOCKED_STAGES
 
 
 def callback_data(delivery):
@@ -37,9 +37,9 @@ def apply_interest(query):
         if not delivery or not TelegramSubscription.objects.filter(pk=sub.pk,enabled=True,chat_id=chat_id,owner_id__in=eligible_user_ids()).exists():
             return 'Кнопка недоступна для этого сообщения.'
         state=UserLotWorkflow.objects.select_for_update().filter(owner_id=sub.owner_id,lot_id=delivery.lot_id).first()
-        if state and state.stage=='interesting':
-            return 'Лот уже в интересных.'
-        if state and state.stage in (*LOCKED_STAGES,'preparing'):
+        if state and state.stage=='preparing':
+            return 'Лот уже на этапе «В работе».'
+        if state and state.stage in LOCKED_STAGES:
             return 'Лот уже на следующем этапе. Этап сохранён.'
         if delivery.lot.announcement.deadline and delivery.lot.announcement.deadline<=timezone.now():
             return 'Приём заявок завершён. Лот не перенесён.'
@@ -48,8 +48,8 @@ def apply_interest(query):
         status_id=(status.get('id') if isinstance(status,dict) else status) or raw.get('status_id')
         if status_id and str(status_id) not in ('6','7','9'):
             return 'Приём по этому лоту недоступен. Лот не перенесён.'
-        add_to_interesting(sub.owner_id,delivery.lot_id)
-        return 'Лот добавлен в интересные.'
+        add_to_participation(sub.owner_id,delivery.lot_id)
+        return 'Лот добавлен на этап «В работе».'
 
 
 def handle_callback(query):

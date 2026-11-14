@@ -28,6 +28,29 @@ class TelegramTests(TestCase):
         for hour,minute,expected in [(1,59,False),(2,0,True),(13,59,True),(14,0,False)]:
             self.assertEqual(in_work_hours(datetime(2026,10,28,hour,minute,tzinfo=dt_timezone.utc)),expected)
 
+    def test_new_lot_notification_includes_cached_quantity_and_unit_price(self):
+        from .models import AnnouncementLotCache
+        from decimal import Decimal
+        lot=store_lot(self.row(2));lot.amount=Decimal('22000');lot.save()
+        AnnouncementLotCache.objects.create(pk=lot.announcement.source_id,rows=[{
+            'id':lot.source_id,'is_combined':True,'system':{'id':1},'plan_items':[
+                {'id':1,'external_id':100,'count':1,'unit_price':5500,'measure':{'id':1,'name':'Штука'}},
+                {'id':2,'external_id':101,'count':3,'unit_price':5500,'measure':{'id':1,'name':'Штука'}},
+                {'id':3,'external_id':100,'count':1,'unit_price':5500,'measure':{'id':1,'name':'Штука'}},
+            ]}])
+        delivery=TelegramDelivery.objects.create(owner=self.owner,profile=self.profile,lot=lot,announcement_key='quantities')
+        text=message_for(delivery)['text']
+        self.assertIn('Количество: <b>4 шт.</b>',text)
+        self.assertIn('Цена за единицу: <b>5 500,00 ₸ без НДС</b>',text)
+        self.assertNotIn('<script>',text)
+
+    def test_unknown_quantity_is_not_guessed_from_total(self):
+        lot=store_lot(self.row(2))
+        delivery=TelegramDelivery.objects.create(owner=self.owner,profile=self.profile,lot=lot,announcement_key='unknown-quantity')
+        text=message_for(delivery)['text']
+        self.assertIn('Количество: <b>Не уточнено</b>',text)
+        self.assertIn('Цена за единицу: <b>Не уточнена</b>',text)
+
     def test_one_time_private_link(self):
         link=connection_link(self.other)
         token=link.split('start=')[1]

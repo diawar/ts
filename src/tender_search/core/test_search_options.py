@@ -58,7 +58,13 @@ class SearchOptionTests(TestCase):
         for size in [10,20,50,100]:
             response=self.client.get(self.url,{'per_page':size})
             self.assertEqual(len(response.context['page']),min(25,size))
-        self.assertContains(self.client.get(self.url),'Количество и цена за единицу не уточнены')
+        soup=BeautifulSoup(self.client.get(self.url).content,'html.parser')
+        quantities=soup.select('.lot-quantity-cell')
+        prices=soup.select('.budget-unit-cell')
+        self.assertEqual(len(quantities),25)
+        self.assertEqual(len(prices),25)
+        self.assertEqual({cell.get_text(strip=True) for cell in quantities},{'Не указано'})
+        self.assertEqual({cell.get_text(strip=True) for cell in prices},{'Не указана'})
 
     def test_phrase_form_preserves_words_and_searches_only_adjacent_prefixes(self):
         form=SearchForm({'terms':'беспроводн мыш; игров клавиатур','kind':'phrase','mode':'any','number_kind':'lot_number'})

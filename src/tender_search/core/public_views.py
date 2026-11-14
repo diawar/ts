@@ -57,7 +57,7 @@ def register(request):
             form.add_conflict_error()
         else:
             login(request, user)
-            messages.success(request, 'Аккаунт создан. Подтвердите email, чтобы начать работу. Ваши 14 бесплатных дней уже начались.')
+            messages.success(request, 'Аккаунт создан. Подтвердите email, чтобы начать работу.')
             return redirect('email_notice')
     return render(request, 'public/register.html', {'form': form})
 

@@ -1,4 +1,4 @@
 <section class="panel lot-triage-actions" id="lot-triage-actions" aria-label="Выбор дальнейшей работы с лотом">
-<form method="post" action="{% url 'collection_move' item_id=untriaged_item.pk %}">{% csrf_token %}<input type="hidden" name="stage" value="interesting"><input type="hidden" name="return_scope" value="all"><input type="hidden" name="return_to" value="{{ back_url }}"><button type="submit" class="button triage-primary">В интересные</button></form>
+<form method="post" action="{% url 'collection_move' item_id=untriaged_item.pk %}">{% csrf_token %}<input type="hidden" name="stage" value="preparing"><input type="hidden" name="return_scope" value="all"><input type="hidden" name="return_to" value="{{ back_url }}"><button type="submit" class="button triage-primary">В работу</button></form>
 <form method="post" action="{% url 'collection_move' item_id=untriaged_item.pk %}">{% csrf_token %}<input type="hidden" name="stage" value="not_participated"><input type="hidden" name="return_scope" value="all"><input type="hidden" name="return_to" value="{{ back_url }}"><button type="submit" class="outline">Неинтересно</button></form>
 </section>

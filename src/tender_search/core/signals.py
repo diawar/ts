@@ -25,9 +25,9 @@ def stop_watch_when_removed(sender,instance,**kwargs):
 def download_when_favorited(sender,instance,created,**kwargs):
     if created:
         from .models import CollectionLot
-        from .workflow_state import syncing, add_to_interesting
+        from .workflow_state import syncing, add_to_participation
         if not syncing.get():
-            add_to_interesting(instance.owner_id, instance.lot_id)
+            add_to_participation(instance.owner_id, instance.lot_id)
 
 
 @receiver(post_save, sender=CollectionLot)

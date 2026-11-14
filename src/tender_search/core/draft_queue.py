@@ -18,20 +18,20 @@ from .workflow_state import update_workflow
 
 
 def expire_draft_queue(owner=None):
-    items=DraftQueueItem.objects.filter(state__in=['queued','ready','running','waiting','paused','blocked'],lot__announcement__deadline__lte=timezone.now())
+    items=DraftQueueItem.objects.filter(state__in=['queued','launching','ready','running','waiting','paused','blocked'],lot__announcement__deadline__lte=timezone.now())
     if owner is not None:items=items.filter(owner=owner)
     for pk in list(items.values_list('pk',flat=True)):
         items.filter(pk=pk).update(state='cancelled',generation=uuid.uuid4(),message='Исключён из очереди: приём заявок завершён.',updated_at=timezone.now())
     # Queue cancellation and CRM stage are separate records. Repair even old
     # cancelled/completed queue entries, preserving preparation and portal evidence.
-    closed=UserLotWorkflow.objects.filter(stage='preparing',lot__announcement__deadline__lte=timezone.now())
+    closed=UserLotWorkflow.objects.filter(stage='preparing',keep_after_deadline=False,lot__announcement__deadline__lte=timezone.now())
     if owner is not None:closed=closed.filter(owner=owner)
     for pk,owner_id in list(closed.values_list('pk','owner_id')):
         with transaction.atomic():
             list(SearchProfile.objects.select_for_update().filter(owner_id=owner_id).order_by('pk'))
             state=closed.select_for_update().filter(pk=pk).first()
             if not state:continue
-            update_workflow(owner_id,state.lot_id,stage='interesting',expired_from_stage='',result_tracking=True)
+            update_workflow(owner_id,state.lot_id,stage='awaiting_results',expired_from_stage='',result_tracking=True)
             from .outcome_service import register_watch
             register_watch(owner_id,state.lot_id)
 
@@ -55,12 +55,12 @@ def enqueue(request):
         target='draft_queue'
     values=list(dict.fromkeys(request.POST.getlist('lots')))
     if not values or len(values)>20 or any(not value.isdecimal() for value in values):
-        messages.error(request,'Выберите от 1 до 20 интересных лотов.')
+        messages.error(request,'Выберите от 1 до 20 лотов на этапе «В работе».')
         return redirect(target)
     count=0
     with transaction.atomic():
         list(SearchProfile.objects.select_for_update().filter(owner=request.user).order_by('pk'))
-        workflows=UserLotWorkflow.objects.select_for_update().select_related('lot__announcement').filter(owner=request.user,lot_id__in=values,stage__in=('interesting','preparing'))
+        workflows=UserLotWorkflow.objects.select_for_update().select_related('lot__announcement').filter(owner=request.user,lot_id__in=values,stage='preparing')
         for workflow in workflows:
             if not supports_preparation_export(workflow.lot) or (workflow.lot.announcement.deadline and workflow.lot.announcement.deadline<=timezone.now()):continue
             item,created=DraftQueueItem.objects.get_or_create(owner=request.user,lot=workflow.lot)
@@ -69,14 +69,21 @@ def enqueue(request):
             update_workflow(request.user.pk,workflow.lot_id,stage='preparing')
             count+=1
     if count:messages.success(request,f'В очереди: {count}. Повторно выбранные лоты не дублируются.')
-    if count<len(values):messages.warning(request,'Часть лотов не добавлена: нужен этап «Интересные лоты» и поддерживаемая площадка Госзакупа.')
+    if count<len(values):messages.warning(request,'Часть лотов не добавлена: нужен этап «В работе» и поддерживаемая площадка Госзакупа.')
     return redirect(target)
 
 
 @login_required
 @require_POST
+@transaction.atomic
 def packet(request,item_id):
-    item=get_object_or_404(DraftQueueItem.objects.select_related('lot__announcement'),owner=request.user,pk=item_id)
+    if request.POST.get('launch_guard') != '1':
+        return JsonResponse({'error':'Обновите страницу очереди и расширение до 0.19.0.'},status=409)
+    company=CompanySettings.objects.select_for_update().filter(owner=request.user).first()
+    list(SearchProfile.objects.select_for_update().filter(owner=request.user).order_by('pk'))
+    item=get_object_or_404(DraftQueueItem.objects.select_for_update().select_related('lot__announcement'),owner=request.user,pk=item_id)
+    if request.POST.get('generation') and request.POST['generation']!=str(item.generation):
+        return JsonResponse({'error':'Очередь изменилась. Обновите страницу.'},status=409)
     if item.lot.announcement.deadline and item.lot.announcement.deadline<=timezone.now() and item.state!='complete':
         expire_draft_queue(request.user)
         return JsonResponse({'skipped':True,'state':'cancelled','message':'Приём заявок завершён. Лот исключён из очереди.'})
@@ -87,14 +94,13 @@ def packet(request,item_id):
         return JsonResponse({'error':'Сначала заполните и сохраните подготовку этого лота.'},status=400)
     from .draft_readiness import readiness
     from .lot_pricing import attach_lot_budgets
-    company=CompanySettings.objects.filter(owner=request.user).first()
     attach_lot_budgets([item.lot])
     availability=readiness(item,company,saved)
     if not availability['can_start']:
         return JsonResponse({'error':availability['reason']},status=400)
     from .preparation import export_saved_preparation
     try:
-        get_object_or_404(UserLotWorkflow,owner=request.user,lot_id=item.lot_id,stage__in=('interesting','preparing'))
+        get_object_or_404(UserLotWorkflow,owner=request.user,lot_id=item.lot_id,stage='preparing')
         saved.lot=item.lot
         data=export_saved_preparation(saved,company)
     except (ValueError,Http404,PermissionDenied):
@@ -105,9 +111,46 @@ def packet(request,item_id):
         return JsonResponse({'error':'Состав лота не подтверждён. Проверьте подготовку в карточке.'},status=400)
     if item.portal_check.get('state')=='requeued' and not data.get('existing_application_number'):
         data['reset_absent_application']=item.portal_check['number']
+    item.state='launching';item.generation=uuid.uuid4();item.message='Передаём запуск расширению…'
+    item.save(update_fields=['state','generation','message','updated_at'])
     response=JsonResponse({'packet':data,'queue_context':{'id':item.pk,'generation':str(item.generation)}})
     response['Cache-Control']='no-store, private'
     return response
+
+
+@login_required
+@require_POST
+def launch_guard(request,item_id):
+    """Fence every extension action against the current owner and queue run."""
+    try:
+        if len(request.body)>2000:raise ValueError()
+        data=json.loads(request.body)
+        if not isinstance(data,dict) or type(data.get('active',False)) is not bool:raise ValueError()
+        with transaction.atomic():
+            company=CompanySettings.objects.select_for_update().filter(owner=request.user).first()
+            list(SearchProfile.objects.select_for_update().filter(owner=request.user).order_by('pk'))
+            item=get_object_or_404(DraftQueueItem.objects.select_for_update().select_related('lot__announcement'),owner=request.user,pk=item_id)
+            if data.get('generation')!=str(item.generation):raise ValueError()
+            if data.get('release') is True:
+                if data.get('idle') is not True or item.state not in ('launching','running','waiting'):raise ValueError()
+                item.state='paused';item.generation=uuid.uuid4();item.message='Передача остановлена. Запуск можно повторить.'
+                item.save(update_fields=['state','generation','message','updated_at'])
+                return JsonResponse({'released':True,'generation':str(item.generation),'state':item.state})
+            same_company=bool(company and company.company_bin and ApplicationPreparation.objects.filter(
+                owner=request.user,lot_id=item.lot_id,company_bin=company.company_bin).exists())
+            if not data.get('active') and item.state=='complete' and same_company:
+                return JsonResponse({'allowed':True},headers={'Cache-Control':'no-store, private'})
+            if (not same_company or item.state not in ('launching','ready','running','waiting','paused','blocked') or
+                    not UserLotWorkflow.objects.filter(owner=request.user,lot_id=item.lot_id,stage='preparing').exists() or
+                    (item.lot.announcement.deadline and item.lot.announcement.deadline<=timezone.now())):
+                raise ValueError()
+            if data.get('active'):
+                item.state='running';item.save(update_fields=['state','updated_at'])
+            response=JsonResponse({'allowed':True})
+            response['Cache-Control']='no-store, private'
+            return response
+    except (ValueError,TypeError):
+        return JsonResponse({'error':'Запуск остановлен или очередь изменилась. Передайте подготовку заново.'},status=409)
 
 
 @login_required
@@ -129,6 +172,7 @@ def progress(request,item_id):
             state=snapshot.get('status')
             if state not in ('ready','running','waiting','paused','blocked','complete'):raise ValueError()
             if item.state=='complete' and state!='complete':raise ValueError()
+            if item.state in ('running','waiting') and state=='ready':raise ValueError()
             has_draft=bool(snapshot.get('number') and snapshot.get('lotConfirmed') is True and snapshot.get('observed_at'))
             if state=='complete' and (not has_draft or snapshot.get('description_saved') is not True):raise ValueError()
             if has_draft:
@@ -156,13 +200,12 @@ def progress(request,item_id):
 @require_POST
 def cancel(request,item_id):
     with transaction.atomic():
+        list(SearchProfile.objects.select_for_update().filter(owner=request.user).order_by('pk'))
         item=get_object_or_404(DraftQueueItem.objects.select_for_update(),owner=request.user,pk=item_id)
-        if item.state in ('running','waiting'):
+        if item.state in ('launching','running','waiting'):
             messages.error(request,'Сначала остановите заполнение в расширении и дождитесь обновления очереди.')
         else:
-            item.state='cancelled';item.save(update_fields=['state','updated_at'])
-            if UserLotWorkflow.objects.filter(owner=request.user,lot_id=item.lot_id,stage='preparing').exists():
-                update_workflow(request.user.pk,item.lot_id,stage='interesting')
+            item.state='cancelled';item.generation=uuid.uuid4();item.save(update_fields=['state','generation','updated_at'])
     return redirect('draft_queue')
 
 

@@ -1,5 +1,5 @@
 {% if lot.workflow.stage in 'won,lost,contract,delivery,payment' %}<p class="muted">Этап: {{ lot.workflow.get_stage_display }}</p>{% endif %}
-{% if lot.workflow.stage == 'won' or lot.workflow.stage == 'lost' or lot.workflow.stage == 'not_participated' %}
+{% if lot.workflow.stage == 'won' or lot.workflow.stage == 'lost' or lot.workflow.stage == 'not_participated' or lot.workflow.stage == 'closed' %}
 <p class="muted">Автоматический перенос в архив — через 30 дней после перехода в этот этап.</p>
 {% endif %}
 {% if lot.contract_watch %}

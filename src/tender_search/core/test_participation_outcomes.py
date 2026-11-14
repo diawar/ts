@@ -51,12 +51,12 @@ class ParticipationTests(TestCase):
     def test_no_manual_submission_needed_for_win_or_loss(self):
         state=self.run_result(Outcome('won',BIN,'Our company'))
         self.assertEqual((state.stage,state.outcome),('contract','won'))
-        update_workflow(self.owner.pk,self.lot.pk,stage='interesting',outcome='',result_tracking=True)
+        update_workflow(self.owner.pk,self.lot.pk,stage='preparing',outcome='',result_tracking=True)
         state=self.run_result(Outcome('lost',OTHER,'Other company'))
         self.assertEqual((state.stage,state.outcome),('lost','lost'))
 
     def test_unknown_absence_waits_full_absence_moves(self):
-        self.assertEqual(self.run_result(Outcome('not_listed',OTHER)).stage,'interesting')
+        self.assertEqual(self.run_result(Outcome('not_listed',OTHER)).stage,'awaiting_results')
         result=Outcome('not_listed',OTHER,participants_complete=True)
         state=self.run_result(result)
         self.assertEqual(state.stage,'not_participated');self.assertFalse(state.result_tracking)
@@ -79,11 +79,13 @@ class ParticipationTests(TestCase):
         with patch('tender_search.core.outcome_service.source_client'),patch('tender_search.core.outcome_service.OutcomePortal') as portal:
             portal.return_value.outcome.side_effect=reopen
             check_outcome(w.pk,'auto')
-        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'interesting')
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'awaiting_results')
+        enroll_participation_checks()
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
 
     def test_pending_and_extended_deadline_do_not_mark_nonparticipation(self):
         state=self.run_result(Outcome('pending'))
-        self.assertEqual(state.stage,'interesting')
+        self.assertEqual(state.stage,'awaiting_results')
         self.lot.announcement.deadline=timezone.now()+timedelta(days=1);self.lot.announcement.save()
         enroll_participation_checks();state.refresh_from_db()
         self.assertFalse(state.result_tracking)
